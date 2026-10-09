@@ -42,7 +42,7 @@ namespace QuantumCircuit.Connector
         {
             this.serviceOperationApi = BuildServiceOperationApi();
 
-            var runCircuit = this.BuildOperation(RunCircuitOperationId, "Run a quantum circuit", "Executes a sequence of Q# gates before measuring, preserving superposition and entanglement within the circuit.", RunCircuitIconUri);
+            var runCircuit = this.BuildOperation(RunCircuitOperationId, "Run a quantum circuit", "Executes ordered gates, named measurements, resets, and measurement-conditioned gate blocks in one Q# shot.", RunCircuitIconUri);
 
             this.apiOperations = new InsensitiveDictionary<ServiceOperation>
             {
@@ -89,10 +89,13 @@ namespace QuantumCircuit.Connector
                             throw new ArgumentException("gates must be an array of circuit instructions.", "gates");
                         }
 
+                        var operations = parameters.TryGetValue("operations", out var operationToken) && operationToken.Type != JTokenType.Null
+                            ? operationToken as JArray ?? throw new ArgumentException("operations must be an array of reusable operation definitions.", "operations")
+                            : new JArray();
                         var shots = parameters.TryGetValue("shots", out var circuitShots) && circuitShots.Type != JTokenType.Null
                             ? circuitShots.Value<int>()
                             : 100;
-                        var result = await QuantumCircuitExecutor.RunAsync(initialState, gates, shots).ConfigureAwait(false);
+                        var result = await QuantumCircuitExecutor.RunAsync(initialState, gates, operations, shots).ConfigureAwait(false);
                         var probabilities = result.Counts.ToDictionary(entry => entry.Key, entry => (double)entry.Value / result.Shots);
                         var body = new JObject
                         {
@@ -103,6 +106,8 @@ namespace QuantumCircuit.Connector
                             ["qubitCount"] = result.QubitCount,
                             ["gateCount"] = result.GateCount,
                             ["shots"] = result.Shots,
+                            ["measurements"] = JArray.FromObject(result.Measurements),
+                            ["classicalMeasurements"] = JArray.FromObject(result.ClassicalMeasurements),
                             ["counts"] = JObject.FromObject(result.Counts),
                             ["probabilities"] = JObject.FromObject(probabilities),
                         };
@@ -145,7 +150,7 @@ namespace QuantumCircuit.Connector
             Properties = new ServiceOperationApiProperties
             {
                 BrandColor = BrandColor,
-                Description = "Executes complete Q# gate sequences on the FullState simulator.",
+                Description = "Expands typed gate operations and executes measurement, reset, and bounded feed-forward circuits on Q# FullState.",
                 DisplayName = "Quantum Circuit (Q#)",
                 IconUri = IconUri,
                 Capabilities = new[] { ApiCapability.Actions },
@@ -213,21 +218,36 @@ namespace QuantumCircuit.Connector
                         "gates", new SwaggerSchema
                         {
                             Type = SwaggerSchemaType.Array,
-                            Title = "Circuit gates",
-                            Description = "Ordered Q# gates. Supported: H, X, Y, Z, S, S_DAG, T, T_DAG, CNOT, CZ, SWAP, TOFFOLI, RX, RY, RZ. Rotations use radians.",
+                            Title = "Circuit instructions",
+                            Description = "Ordered instructions: gates H, X, Y, Z, S, S_DAG, T, T_DAG, CNOT, CZ, SWAP, TOFFOLI, RX, RY, RZ; MEASURE with target and measurement name; RESET with target; or IF with an earlier measurement, Boolean equals, and then/optional else gate arrays. Rotations use radians. IF blocks are one level deep.",
                             Items = new SwaggerSchema
                             {
                                 Type = SwaggerSchemaType.Object,
                                 Properties = new OrdinalDictionary<SwaggerSchema>
                                 {
-                                    { "gate", StringSchema("Gate", "Gate name.") },
-                                    { "target", IntegerSchema("Target", "Target qubit index. Required for every gate.") },
-                                    { "control", IntegerSchema("Control", "Control qubit (CNOT/CZ/SWAP/TOFFOLI).") },
-                                    { "control2", IntegerSchema("Second control", "Second control for TOFFOLI.") },
+                                    { "gate", StringSchema("Gate", "Gate name or CALL.") },
+                                    { "target", new SwaggerSchema { Title = "Target or parameter placeholder", Description = "Integer qubit index for primitive gates." } },
+                                    { "control", new SwaggerSchema { Title = "Control", Description = "Integer control index for controlled gates." } },
+                                    { "control2", new SwaggerSchema { Title = "Second control", Description = "Integer second control for Toffoli." } },
                                     { "angle", new SwaggerSchema { Type = SwaggerSchemaType.Number, Title = "Angle", Description = "Rotation angle in radians for RX/RY/RZ." } },
+                                    { "operation", StringSchema("Reusable operation", "Name of the operation to call when gate is CALL.") },
+                                    { "arguments", new SwaggerSchema { Type = SwaggerSchemaType.Object, Title = "Typed arguments", Description = "Arguments declared by the named operation." } },
+                                    { "measurement", StringSchema("Measurement name", "Required for MEASURE; unique within this circuit.") },
+                                    { "equals", new SwaggerSchema { Type = SwaggerSchemaType.Boolean, Title = "Expected measurement", Description = "Boolean value used by an IF instruction." } },
+                                    { "then", new SwaggerSchema { Type = SwaggerSchemaType.Array, Title = "If branch", Items = new SwaggerSchema { Type = SwaggerSchemaType.Object } } },
+                                    { "else", new SwaggerSchema { Type = SwaggerSchemaType.Array, Title = "Else branch", Items = new SwaggerSchema { Type = SwaggerSchemaType.Object } } },
                                 },
-                                Required = new[] { "gate", "target" },
+                                Required = new[] { "gate" },
                             },
+                        }
+                    },
+                    {
+                        "operations", new SwaggerSchema
+                        {
+                            Type = SwaggerSchemaType.Array,
+                            Title = "Reusable operation definitions",
+                            Description = "Optional named gate templates with typed Int and Double parameters, as returned by the circuit builder.",
+                            Items = new SwaggerSchema { Type = SwaggerSchemaType.Object, Description = "Reusable operation definition." },
                         }
                     },
                     {
@@ -249,9 +269,18 @@ namespace QuantumCircuit.Connector
                 { "sample", StringSchema("Sample", "One measured output bit string.") },
                 { "measuredState", StringSchema("Measured state", "Ket notation of the sample.") },
                 { "qubitCount", IntegerSchema("Qubit count", "Number of qubits in the circuit.") },
-                { "gateCount", IntegerSchema("Gate count", "Number of gate instructions in the circuit.") },
+                { "gateCount", IntegerSchema("Gate count", "Number of unitary gate instructions after reusable operations expand; both IF branches count toward this value.") },
                 { "shots", IntegerSchema("Shots", "Number of complete circuit executions.") },
-                { "counts", new SwaggerSchema { Type = SwaggerSchemaType.Object, Title = "Measurement counts", Description = "Histogram of measured bit strings." } },
+                { "measurements", new SwaggerSchema
+                    {
+                        Type = SwaggerSchemaType.Array,
+                        Title = "Typed measurement samples",
+                        Description = "One Boolean array per shot; true represents Q# Result.One.",
+                        Items = new SwaggerSchema { Type = SwaggerSchemaType.Array, Items = new SwaggerSchema { Type = SwaggerSchemaType.Boolean } },
+                    }
+                },
+                { "classicalMeasurements", new SwaggerSchema { Type = SwaggerSchemaType.Array, Title = "Named mid-circuit results", Description = "One object per shot. Boolean values are named Result values recorded by MEASURE and available to later IF instructions.", Items = new SwaggerSchema { Type = SwaggerSchemaType.Object } } },
+                { "counts", new SwaggerSchema { Type = SwaggerSchemaType.Object, Title = "Measurement counts", Description = "Histogram of terminal measured bit strings." } },
                 { "probabilities", new SwaggerSchema { Type = SwaggerSchemaType.Object, Title = "Empirical probabilities", Description = "Counts divided by shots for each measured bit string." } },
             });
 

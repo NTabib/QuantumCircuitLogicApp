@@ -22,13 +22,24 @@
                   "type": "object",
                   "properties": {
                     "gate": { "type": "string" },
-                    "target": { "type": "integer" },
-                    "control": { "type": "integer" },
-                    "control2": { "type": "integer" },
-                    "angle": { "type": "number" }
+                    "target": {},
+                    "control": {},
+                    "control2": {},
+                    "angle": {},
+                    "operation": { "type": "string" },
+                    "arguments": { "type": "object" },
+                    "measurement": { "type": "string" },
+                    "equals": { "type": "boolean" },
+                    "then": { "type": "array", "items": { "type": "object" } },
+                    "else": { "type": "array", "items": { "type": "object" } }
                   },
-                  "required": [ "gate", "target" ]
+                  "required": [ "gate" ]
                 }
+              },
+              "operations": {
+                "type": "array",
+                "description": "Optional reusable gate templates with typed Int and Double parameters.",
+                "items": { "type": "object" }
               },
               "shots": {
                 "type": "integer",
@@ -51,6 +62,7 @@
               "parameters": {
                 "initialState": "@coalesce(triggerBody()?['initialState'], '00')",
                 "gates": "@coalesce(triggerBody()?['gates'], json('[{\"gate\":\"H\",\"target\":0},{\"gate\":\"CNOT\",\"control\":0,\"target\":1}]'))",
+                "operations": "@coalesce(triggerBody()?['operations'], json('[]'))",
                 "shots": "@coalesce(triggerBody()?['shots'], 100)"
               },
               "serviceProviderConfiguration": {

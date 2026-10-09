@@ -73,10 +73,10 @@
     <h2>3. The implementation: two providers and a Q# backend</h2>
     <p>The solution uses <strong>custom built-in service providers for Logic Apps Standard</strong>. These are .NET WebJobs extensions loaded in the workflow host, rather than managed HTTP custom connectors registered against an external API.</p>
     <div class="table-wrap"><table><thead><tr><th>Component</th><th>Responsibility</th></tr></thead><tbody>
-      <tr><td><code>QuantumCircuitBuilderServiceOperationProvider</code></td><td>Exposes Create circuit and 15 gate-specific actions, including X. Validates and appends instructions without running the simulator.</td></tr>
-      <tr><td><code>QuantumCircuitServiceOperationProvider</code></td><td>Exposes the generic Run a quantum circuit action and describes its inputs and outputs to the designer.</td></tr>
-      <tr><td><code>QuantumCircuitExecutor</code></td><td>Shares circuit validation with the builder, maps gate instructions into Q# arguments, runs shots and aggregates measurements.</td></tr>
-      <tr><td><code>QuantumCircuit.qs</code></td><td>Provides the single complete-circuit Q# dispatcher and performs final measurements.</td></tr>
+      <tr><td><code>QuantumCircuitBuilderServiceOperationProvider</code></td><td>Exposes Create circuit, 15 gate actions, named measurement, reset, and IF/ELSE. Validates and appends instructions without running the simulator.</td></tr>
+      <tr><td><code>QuantumCircuitServiceOperationProvider</code></td><td>Exposes the generic Run a quantum circuit action, including named classical results and terminal measurements.</td></tr>
+      <tr><td><code>QuantumCircuitExecutor</code></td><td>Validates ordered instructions, expands reusable operations, maps measurement-dependent gates into Q# arguments, runs shots and aggregates results.</td></tr>
+      <tr><td><code>QuantumCircuit.qs</code></td><td>Provides one Q# dispatcher that measures, resets, branches on stored Results, and finally measures the register.</td></tr>
       <tr><td><code>QuantumCircuitStartup</code></td><td>Registers both providers through dependency injection and the Logic Apps service-provider registry.</td></tr>
     </tbody></table></div>
     <p>The providers expose operation manifests with typed schemas and designer-friendly labels. Their connections are declared in <code>connections.json</code>. The builder uses <code>format=instruction-list-v1</code>; the execution connection requires <code>simulator=FullState</code>, its only supported backend. Neither requires credentials or an X-specific connection. Logic Apps requires nonempty <code>parameterValues</code>; an empty object causes <code>MissingServiceProviderConnectionParameterValues</code> before circuit execution.</p>
@@ -86,8 +86,10 @@
 
   <section id="visual">
     <h2>4. Turning quantum gates into visual steps</h2>
-    <p>A raw circuit array is compact, but writing it by hand does not deliver the visual experience. The Circuit Builder makes each gate its own designer action: Hadamard; X, Y and Z; S and T with their adjoints; CNOT; controlled Z; SWAP; Toffoli; and Rx, Ry and Rz rotations.</p>
+    <p>A raw circuit array is compact, but writing it by hand does not deliver the visual experience. The Circuit Builder makes each gate its own designer action: Hadamard; X, Y and Z; S and T with their adjoints; CNOT; controlled Z; SWAP; Toffoli; and Rx, Ry and Rz rotations. It also exposes named measurement, reset, and a designer action for adding an IF/ELSE block keyed to an earlier measurement.</p>
     <p>Each action takes the preceding <code>circuit</code> output and gate-specific parameters. Target and control indices are zero-based; rotations use radians. The left-most character of the initial bit string represents qubit 0. A builder action returns a new descriptor rather than mutating its input.</p>
+    <p>Reusable operations add <code>defineOperation</code> and <code>callOperation</code> for named gate templates with typed <code>Int</code>/<code>Double</code> inputs. Calls expand into primitive gates before one coherent Q# run; templates remain gate-only. The circuit stream supports named <code>MEASURE</code>, <code>RESET</code>, and one-level <code>IF</code>/<code>ELSE</code> over an earlier measurement. These instructions execute inside one Q# invocation per shot, not as separate connector calls on live qubits.</p>
+    <p>Terminal results remain in the Boolean <code>measurements</code> arrays. Mid-circuit values appear in <code>classicalMeasurements</code> as named booleans, where Q# <code>Result.Zero</code>/<code>Result.One</code> map to <code>false</code>/<code>true</code>. Branches may contain gates or gate-template calls, but not nested conditions, measurements, resets, loops, or arbitrary Q# statements.</p>
     <pre><code>{
   "initialState": "00",
   "gates": [
@@ -98,16 +100,18 @@
     <p>In <code>VisualQuantumCircuitWorkflow</code>, the steps are Create circuit, Hadamard on qubit 0, CNOT from 0 to 1 and Execute complete circuit. The Hadamard action receives <code>@body('Create_circuit')?['circuit']</code>. The CNOT action receives the Hadamard output. Finally, the executor takes <code>initialState</code> and <code>gates</code> from the completed descriptor.</p>
     <p>This Bell circuit creates <code>(|00&gt; + |11&gt;)/sqrt(2)</code>. Measurement produces correlated outcomes: only <code>00</code> or <code>11</code>, with equal theoretical probabilities. A finite sample need not split exactly in half.</p>
     <figure><img src="images/circuit-descriptor-evolution.svg" width="1200" height="620" alt="An empty circuit descriptor gains a Hadamard instruction, then a CNOT instruction, before the final executor prepares, applies and measures the circuit." /><figcaption>Figure 3. Circuit-building steps exchange immutable plans. Coherent quantum execution begins only at the final executor.</figcaption></figure>
-    <p>Immutability also matters operationally. A retry of an append action with the same input produces the same circuit rather than duplicating a gate. Two branches can safely derive separate circuits from one descriptor. However, parallel branches are not automatically merged into a single algorithm; a linear gate sequence must be explicitly chained.</p>
-    <p>Builder and executor share validation. An out-of-range index, a repeated control/target operand, an unsupported gate, an invalid angle or an oversized circuit fails before simulation. Execution retries remain different from builder retries: fresh quantum measurements can produce different samples.</p>
+    <p><code>MeasurementControlWorkflow</code> follows a deterministic reference Q# program: it records 0, flips and records 1, resets the measured qubit, then uses both the true and else branches. Every shot finishes in <code>|00&gt;</code>. The named classical results remain visible alongside the terminal sample, showing that feed-forward does not require persisting a live qubit in Logic Apps.</p>
+    <p>Immutability also matters operationally. A retry of an append action with the same input produces the same circuit rather than duplicating an instruction. Two branches can safely derive separate circuit descriptors, but these workflow graph branches are not automatically merged. Circuit-level IF branches instead live inside the ordered descriptor and execute against Q# measurement values.</p>
+    <p>Builder and executor share validation. An out-of-range index, a repeated control/target operand, an unknown or forward measurement reference, an unsupported nested condition, an invalid angle or an oversized circuit fails before simulation. Execution retries remain different from builder retries: fresh quantum measurements can produce different samples.</p>
   </section>
 
   <section id="algorithms">
-    <h2>5. Ten algorithm demonstrations on the canvas</h2>
-    <p>The solution includes ten additional stateful workflows, each constructed from explicit visual gate actions. These are intentionally <strong>small fixed instances</strong>, not turnkey algorithms for arbitrary inputs, oracles or problem sizes. Their HTTP triggers accept an optional <code>shots</code> value, defaulting to 100.</p>
+    <h2>5. Algorithm demonstrations on the canvas</h2>
+    <p>The solution includes ten original algorithm workflows built from explicit visual gate actions, plus a teleportation workflow demonstrating mid-circuit measurement and classical feed-forward. These are intentionally <strong>small fixed instances</strong>, not turnkey algorithms for arbitrary inputs, oracles or problem sizes. Their HTTP triggers accept an optional <code>shots</code> value, defaulting to 100.</p>
     <div class="table-wrap"><table><thead><tr><th>Workflow</th><th>Implemented example</th></tr></thead><tbody>
-      <tr><td><code>DeutschJozsaWorkflow</code></td><td>A two-input balanced parity oracle, <code>f(x)=x0 XOR x1</code>. Input measurements are 11; classical output identifies the oracle as balanced.</td></tr>
-      <tr><td><code>BernsteinVaziraniWorkflow</code></td><td>A three-bit secret, 101, encoded through phase kickback. Final input bits recover 101; the measured ancilla can vary.</td></tr>
+      <tr><td><code>TeleportationWorkflow</code></td><td>Teleports <code>|+&gt;</code> using Bell-basis measurement, reset and X/Z corrections; an X-basis check confirms every shot.</td></tr>
+      <tr><td><code>DeutschJozsaWorkflow</code></td><td>A two-input balanced parity oracle; input measurements are 11 and the result identifies a balanced function.</td></tr>
+      <tr><td><code>BernsteinVaziraniWorkflow</code></td><td>A three-bit secret 101 encoded through phase kickback. Final input bits recover 101; the measured ancilla can vary.</td></tr>
       <tr><td><code>GroverWorkflow</code></td><td>A two-qubit search with marked state 11 and one oracle/diffusion iteration. Final measurement finds 11.</td></tr>
       <tr><td><code>QuantumFourierTransformWorkflow</code></td><td>QFT on 01 plus a separate, freshly prepared QFT/inverse-QFT round trip. Forward Z outcomes are uniform in expectation; the round trip recovers 01.</td></tr>
       <tr><td><code>QuantumPhaseEstimationWorkflow</code></td><td>Two counting qubits estimate phase 1/4 of S on eigenstate <code>|1&gt;</code>. The counting register returns 01.</td></tr>
@@ -116,7 +120,7 @@
       <tr><td><code>GhzWorkflow</code></td><td>Three-qubit GHZ preparation. Final measurements contain only 000 or 111.</td></tr>
       <tr><td><code>VqeWorkflow</code></td><td>A single-qubit Hamiltonian Z with an Ry ansatz and a three-candidate classical parameter sweep. The grid includes ground energy -1.</td></tr>
       <tr><td><code>QaoaWorkflow</code></td><td>Depth-one QAOA for two-vertex MaxCut with three candidate parameter pairs. The grid includes cut probability 1.</td></tr>
-    </tbody></table></div>
+      </tbody></table></div>
     <p>Controlled phases in QFT and phase estimation are decomposed into supported Rz and CNOT gates. Simon's classical recovery is specialized to its two-input example; it is not a general solver for systems over GF(2). GHZ is a state-preparation demonstration rather than a computational algorithm, but it provides a clear visual example of multi-qubit entanglement.</p>
   </section>
 
@@ -136,7 +140,7 @@
     <pre><code># Run from the solution root after selecting your Azure subscription.
 az login
 .\deploy\deploy.ps1 -ResourceGroup rg-quantum-circuit -Location westeurope</code></pre>
-    <p>The script provisions infrastructure, publishes the project, zip-deploys it and obtains workflow callback URLs. It exercises the X-gate workflow through the shared <code>addX</code> builder action, the visual Bell workflow and the algorithm-specific test suite in <code>Test-AlgorithmWorkflows.ps1</code>. These assertions examine allowed outcomes and shot totals, QFT reversibility, phase recovery, Simon's measurement-dependent recovery and variational scores recomputed from counts.</p>
+    <p>The deployment script first compares the circuit executor with independent native Q# reference programs, then provisions infrastructure, publishes and zip-deploys the app. Cloud smoke tests exercise the X-gate path, six beginner lessons, reusable operations, measurement/reset/conditional feed-forward, teleportation, the visual Bell workflow and ten original algorithms.</p>
     <p>The X demo test checks that the workflow builds an X instruction with the shared builder and that every shot from <code>|0&gt;</code> measures <code>1</code>. Bell and algorithm checks do not insist on an exact 50/50 split in probabilistic experiments. The generic circuit execution path uses the Q# full-state simulator.</p>
     <p>For local development, the same application can run with Azure Functions Core Tools and Azurite. Keep callback URLs secret because they contain SAS signatures, and exclude local settings and build artifacts from source control. Provisioned cloud resources incur Azure charges; this article does not imply that resources have already been deployed.</p>
   </section>
@@ -144,7 +148,7 @@ az login
   <section id="limits">
     <h2>8. What this architecture does not promise</h2>
     <p>A universal gate set is not the same as an unrestricted quantum platform. The current circuit action caps execution at <strong>20 qubits, 256 instructions and 1,000 shots</strong>. These are application limits, not fundamental Q# limits. The full-state simulator's memory grows exponentially with the number of qubits.</p>
-    <p>Initial states must be computational-basis bit strings; other states can be prepared using gates. Measurements occur only at the end of each circuit. There is no intermediate quantum measurement followed by conditional gate execution, no persistent quantum session, no general reusable-subcircuit abstraction and no real hardware submission in this implementation.</p>
+    <p>Initial states must be computational-basis bit strings; other states can be prepared using gates. Reusable templates accept typed <code>Int</code>/<code>Double</code> inputs but are gate-only and cannot call nested operations. The circuit stream supports up to 32 named measurements and one-level IF/ELSE blocks referencing earlier results; branches may contain only unitary gates or reusable gate calls. Nested conditions, branch-local measurement/reset, loops, and arbitrary classical/Q# statements are still unsupported. There is no persistent quantum session or real hardware submission.</p>
     <p>Consequently, general teleportation with classical feed-forward, adaptive error correction and practical Shor factoring are outside its scope. QFT and phase estimation are valuable building blocks, but their presence does not constitute a complete factoring implementation.</p>
     <aside class="callout caution"><strong>SDK boundary:</strong> this project uses classic <code>Microsoft.Quantum.Sdk</code> 0.28 and its .NET simulators. The modern QDK has a different toolchain and is not a drop-in replacement for this host integration. Review legacy dependency and runtime support before production use. Moving to a modern backend or Azure Quantum requires a new execution adapter and compatible job compilation/submission, not just a simulator-name change.</aside>
     <p>Executing these circuits on a classical simulator also does not demonstrate a practical quantum speedup. The value of the project is visual authoring, transparent orchestration and a clean separation between classical control and coherent circuit execution.</p>
@@ -154,7 +158,7 @@ az login
     <h2>9. The bigger idea</h2>
     <p>A visual quantum designer does not have to be a completely new application. An existing workflow designer can provide the canvas, while a circuit descriptor acts as a small intermediate representation and Q# supplies the execution semantics.</p>
     <p>The essential design choice is to avoid executing every visual gate independently. <strong>Visual steps construct the plan; one executor owns the quantum state.</strong> That separation turns the original X-gate example into a reusable educational and integration-oriented platform for expressing quantum circuits, observing classical results and exploring hybrid algorithms.</p>
-    <p>Future extensions could add reusable subcircuits, richer parameter management, explicit classical optimization services and a remote quantum execution backend. They should preserve the same boundary: workflow history is classical data, while coherence belongs to the quantum runtime.</p>
+    <p>Future extensions could add nested reusable operations, broader Q# parameter types, branch-local measurement/reset, loops and richer classical state, explicit optimization services and a remote quantum execution backend. They should preserve the same boundary: workflow history is classical data, while coherence belongs to the quantum runtime.</p>
   </section>
 
   <footer>

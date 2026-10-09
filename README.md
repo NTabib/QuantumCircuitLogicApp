@@ -16,7 +16,7 @@ QuantumCircuitLogicApp/
 │  ├─ QuantumCircuit.QSharp/           # Q# circuit dispatcher for the supported gate set
 │  │  └─ QuantumCircuit.qs
 │  ├─ QuantumCircuit.Connector/        # custom built-in connectors, loaded in-process
-│  │  ├─ QuantumCircuitBuilderServiceOperationProvider.cs # createCircuit + 15 gate actions
+│  │  ├─ QuantumCircuitBuilderServiceOperationProvider.cs # gates + measure/reset/IF actions
 │  │  ├─ QuantumCircuitServiceOperationProvider.cs        # generic runCircuit action
 │  │  ├─ QuantumCircuitExecutor.cs                       # validates and executes full circuits
 │  │  └─ QuantumCircuitStartup.cs                        # registers both providers
@@ -24,6 +24,7 @@ QuantumCircuitLogicApp/
 │     ├─ host.json / connections.json / local.settings.json
 │     ├─ XGateDemoWorkflow/workflow.json  # X built with generic createCircuit/addX/runCircuit
 │     ├─ Lesson*Workflow/workflow.json     # beginner gate lessons with explanations
+│     ├─ ReusableOperationWorkflow/workflow.json # typed subroutines and Boolean results
 │     ├─ QuantumCircuitWorkflow/workflow.json
 │     └─ VisualQuantumCircuitWorkflow/workflow.json # visual gate steps -> executor
 └─ deploy/
@@ -154,13 +155,79 @@ with roughly half of the shots each (finite-shot sampling varies). The response 
 counts, and empirical probabilities. The workflow defaults to this Bell-state example when `gates`
 is omitted.
 
+## Reusable operations and typed results
+
+The `ReusableOperationWorkflow` lesson demonstrates the first executable Q# subset extension. The
+builder's **Define reusable operation** action stores a named gate template in the circuit descriptor;
+**Call reusable operation** adds a call with typed arguments. This example defines
+`RotateYByAngle(target: Int, angle: Double)` once and calls it for two qubits. Gate-template operands
+can use whole-field references such as `"$target"` and `"$angle"`. Currently supported operation
+parameter types are `Int` and finite `Double`; `Int` values used as qubit indices are range-checked
+when the completed circuit is compiled.
+
+The executor expands operation calls to primitive gates before one Q# run, so calls can be reused
+without moving a live qubit through Logic Apps. Definitions cannot call other definitions yet.
+Expanded circuits retain the 256-instruction limit; a descriptor may define up to 32 reusable
+operations with up to 32 parameters each. Reusable definitions remain gate-only and cannot contain
+measurement, reset or classical branches. The generic `QuantumCircuitWorkflow` accepts the same `operations` definitions
+and `CALL` instructions directly in its request body, for manual translation without builder actions.
+
+Example request (two calls to the same typed operation):
+
+```json
+{
+  "initialState": "00",
+  "operations": [{
+    "name": "RotateYByAngle",
+    "parameters": [{ "name": "target", "type": "Int" }, { "name": "angle", "type": "Double" }],
+    "gates": [{ "gate": "RY", "target": "$target", "angle": "$angle" }]
+  }],
+  "gates": [
+    { "gate": "CALL", "operation": "RotateYByAngle", "arguments": { "target": 0, "angle": 1.5707963267948966 } },
+    { "gate": "CALL", "operation": "RotateYByAngle", "arguments": { "target": 1, "angle": 1.5707963267948966 } }
+  ],
+  "shots": 100
+}
+```
+
+`runCircuit` returns terminal `measurements` as a Boolean array per shot and `classicalMeasurements`
+with each named mid-circuit result. `false` maps to Q# `Result.Zero`; `true` maps to `Result.One`.
+Existing sample strings, counts, and probabilities remain available.
+
+## Mid-circuit measurement, reset, and conditions
+
+The instruction stream now supports ordered `MEASURE`, `RESET`, and one-level `IF` blocks. A
+measurement collapses the selected qubit using Q# `M` and stores the outcome under a unique identifier;
+`RESET` returns its qubit to `|0>` without exposing a separate result. A later `IF` may compare an
+already-recorded name to a Boolean and execute a `then` or optional `else` list of unitary gates (or
+calls to gate-only reusable operations). All of this executes inside the same Q# shot, so Logic Apps
+still passes only classical circuit descriptions and results.
+
+```json
+[
+  { "gate": "MEASURE", "target": 0, "measurement": "readout" },
+  { "gate": "RESET", "target": 0 },
+  { "gate": "IF", "measurement": "readout", "equals": true,
+    "then": [{ "gate": "X", "target": 1 }],
+    "else": [{ "gate": "Z", "target": 1 }] }
+]
+```
+
+Measurement names must be unique identifiers and conditions can reference only earlier measurements.
+At most 32 named measurements and 256 expanded instructions are accepted. Conditional branches may
+contain unitary gates or reusable calls only; nested conditions, measurement/reset inside a branch,
+`MeasurementControlWorkflow` demonstrates both IF and ELSE paths. `TeleportationWorkflow` uses
+these instructions for Bell-basis measurement and classical feed-forward corrections; an additional H
+followed by terminal Z measurement checks that Bob received `|+>`. `tests\QuantumCircuit.ReferenceTests`
+checks collapse, reset and feed-forward against independent native Q# reference operations.
+
 ## Visual quantum algorithms (`VisualQuantumCircuitWorkflow`)
 
-The **Quantum Circuit Builder** built-in connector exposes **Create circuit** and separate visual
-steps for Hadamard, X, Y, Z, S, adjoint S, T, adjoint T, CNOT, CZ, SWAP, Toffoli, Rx, Ry, and Rz.
-Each gate step takes the `circuit` object from the preceding action and returns an updated
-`body.circuit`. These steps only append validated instructions: they do not allocate qubits, execute
-quantum gates, or measure anything.
+The **Quantum Circuit Builder** built-in connector exposes **Create circuit**, 15 gate actions,
+named measurement, reset, and an **If measurement result** action. Each action takes the `circuit`
+object from the preceding step and returns an updated `body.circuit`; they only append validated
+instructions and never allocate or execute qubits. The new actions have distinct Measure (`M`) and
+Reset (`R`) designer icons.
 
 The supplied workflow builds a Bell algorithm visually:
 
@@ -186,6 +253,43 @@ contains both the assembled circuit and its measurement histogram. An invalid in
 index, duplicate control/target, angle, or oversized circuit fails the builder step before execution.
 Limits are shared with the executor: 20 qubits, 256 instructions, and 1,000 execution shots.
 
+### Teleportation example
+
+`TeleportationWorkflow` teleports `|+>` from qubit 0 to Bob's qubit 2. Here is the corresponding
+Q# program (the final Hadamard changes the measurement basis to verify the teleported `|+>` state):
+
+```qsharp
+namespace QuantumCircuit.QSharp {
+    open Microsoft.Quantum.Intrinsic;
+    open Microsoft.Quantum.Measurement;
+
+    operation TeleportPlus() : Result[] {
+        use q = Qubit[3];
+        H(q[0]);
+        H(q[1]);
+        CNOT(q[1], q[2]);
+        CNOT(q[0], q[1]);
+        H(q[0]);
+        let m0 = M(q[0]);
+        let m1 = M(q[1]);
+        Reset(q[0]);
+        Reset(q[1]);
+        if m1 == One { X(q[2]); }
+        if m0 == One { Z(q[2]); }
+        H(q[2]);
+        let output = MResetZ(q[2]);
+        return [m0, m1, output];
+    }
+}
+```
+
+The workflow builds this sequence as a visual circuit: `H(0) -> H(1) -> CNOT(1,2) -> CNOT(0,1) ->
+H(0) -> MEASURE(m0,m1) -> RESET(0,1) -> IF(m1) X(2) -> IF(m0) Z(2) -> H(2) -> runCircuit`.
+The entire program runs in one Q# invocation per shot. `classicalMeasurements` returns `m0` and `m1`;
+terminal `measurements` include the two reset qubits and Bob's verification result. For a correct
+teleportation of `|+>`, every shot ends in `000`. To see the teleported state in the computational basis
+instead, omit the final `H(2)`; the last bit is then a 50/50 sample.
+
 The connection in `connections.json` uses `/serviceProviders/quantumCircuitBuilder` with
 `format=instruction-list-v1`. It requires no external service or credentials. Each append deep-clones
 the input descriptor; retrying the same step with the same input produces the same circuit, and
@@ -193,11 +297,12 @@ branches cannot mutate each other's gate lists. For a single ordered algorithm, 
 sequentially; parallel branches are separate circuits and are not automatically merged. Retrying
 **execution** can produce different samples because measurement is probabilistic.
 
-All gates run coherently in one Q# invocation per shot, with measurement only at the end. This is
-visual circuit construction, not a persistent quantum session, and does not support branching on
-intermediate measurements. The deployment script publishes the builder, executor, X demo, six
-beginner gate lessons, visual workflow, and ten algorithm examples together; no additional Azure
-resources are required.
+All instructions run in order within one Q# invocation per shot. Mid-circuit measurements collapse
+state and their classical results can control the bounded IF action; terminal measurements still
+produce the existing sample strings and histograms. This is visual circuit construction, not a
+persistent quantum session. The deployment script publishes the builder, executor, X demo, six
+beginner gate lessons, reusable-operation and measurement/control-flow lessons, teleportation,
+visual workflow, and ten original algorithm examples together; no additional Azure resources are required.
 
 With the local host running on port 7071, invoke the visual workflow:
 
@@ -211,14 +316,16 @@ secret because it contains a SAS signature.
 
 ## Algorithm demonstration workflows
 
-Each of the following folders under `src\QuantumCircuit.LogicApp` contains its own stateful
-`workflow.json`. The gate instructions are separate Circuit Builder actions visible in the designer;
-only the final executor creates and measures qubits. POST `{}` or `{"shots":100}` to a workflow's
-Request trigger (1-1,000 shots per circuit). These are **small fixed instances**, not general-purpose
-implementations accepting arbitrary oracles or problem sizes.
+`TeleportationWorkflow` is documented above. The ten original algorithm workflows are listed here.
+Each listed workflow has its own `workflow.json`; the visual workflows construct an ordered circuit
+in the designer, and the executor runs it. POST `{}` or
+`{"shots":100}` to a workflow's Request trigger (1-1,000 shots per circuit). These are **small fixed
+instances**, not general-purpose implementations accepting arbitrary oracles or problem sizes.
 
 | Workflow | Demonstration and expected result |
 |---|---|
+| `MeasurementControlWorkflow` | Deterministic measurement/reset and conditional-branch lesson; every shot ends in `00`. |
+| `TeleportationWorkflow` | Teleports `|+>` using Bell measurement and X/Z feed-forward, then verifies in the X basis; every shot ends in `000`. |
 | `DeutschJozsaWorkflow` | Two input bits and an ancilla; balanced parity oracle `x0 XOR x1`. Input measurements are `11`; reports `balanced`. |
 | `BernsteinVaziraniWorkflow` | Three-bit secret `101` encoded with CNOTs and phase kickback. Reports recovered secret `101`; final ancilla bit varies. |
 | `GroverWorkflow` | Two-qubit search, marked item `11`, one oracle/diffusion iteration. Measures `11`. |
@@ -233,24 +340,38 @@ implementations accepting arbitrary oracles or problem sizes.
 VQE and QAOA return `evaluations`, `bestParameters`, `bestObjective`, and `bestCounts`; every iteration
 builds a fresh circuit and measures it before classical comparison. Their sweeps are deliberately
 small demonstrations rather than full numerical optimizers. Measurement noise can affect which
-candidate wins a tie. All examples use computational-basis initialization and final-only
-measurement; general teleportation feed-forward, adaptive error correction, and practical Shor
-factoring are not included.
+candidate wins a tie. The ten original algorithm demonstrations use computational-basis initialization
+and final-only measurement; general teleportation, adaptive error correction and practical Shor factoring
+are outside their scope. The separate measurement-control and teleportation workflows exercise the
+mid-circuit subset.
 
 `deploy\Test-AlgorithmWorkflows.ps1` supplies algorithm-specific assertions. `deploy.ps1` runs them
 after publishing, including QFT reversibility, phase recovery, Simon's finite-shot recovery rule,
 and VQE/QAOA objectives recomputed from their measurements. `deploy\Test-BeginnerGateWorkflows.ps1`
 checks the six introductory gate circuits, shot totals and allowed outcomes without requiring an exact
-random 50/50 split. All workflows use the Q# full-state simulator.
+random 50/50 split. `deploy\Test-ReusableOperationWorkflow.ps1` checks typed reusable-operation calls,
+Boolean measurement arrays and invalid-type rejection. `deploy\Test-MeasurementControlWorkflow.ps1`
+checks measurement collapse, reset, true/else branches, the generic HTTP path and invalid forward
+references. `deploy\Test-TeleportationWorkflow.ps1` checks Bell measurement, feed-forward corrections
+and deterministic verification of the teleported `|+>` state. Run `dotnet run --project
+.\tests\QuantumCircuit.ReferenceTests -c Release` to compare executor shots with native Q# reference
+programs and reject malformed control flow. All workflows use the Q# full-state simulator.
 
-To run the same suite against a local host without provisioning Azure:
+To run these suites against a local host without provisioning Azure:
 
 ```powershell
 . .\deploy\Test-AlgorithmWorkflows.ps1
-Test-AlgorithmWorkflows -GetCallbackUrl {
-    param($name)
-    (Invoke-RestMethod -Method Post -Uri "http://localhost:7071/runtime/webhooks/workflow/api/management/workflows/$name/triggers/When_a_HTTP_request_is_received/listCallbackUrl?api-version=2020-05-01-preview").value
-}
+. .\deploy\Test-BeginnerGateWorkflows.ps1
+. .\deploy\Test-ReusableOperationWorkflow.ps1
+. .\deploy\Test-MeasurementControlWorkflow.ps1
+. .\deploy\Test-TeleportationWorkflow.ps1
+$resolver = { param($name) (Invoke-RestMethod -Method Post -Uri "http://localhost:7071/runtime/webhooks/workflow/api/management/workflows/$name/triggers/When_a_HTTP_request_is_received/listCallbackUrl?api-version=2020-05-01-preview").value }
+Test-AlgorithmWorkflows -GetCallbackUrl $resolver
+Test-BeginnerGateWorkflows -GetCallbackUrl $resolver
+Test-ReusableOperationWorkflow -GetCallbackUrl $resolver
+Test-MeasurementControlWorkflow -GetCallbackUrl $resolver
+Test-TeleportationWorkflow -GetCallbackUrl $resolver
+dotnet run --project .\tests\QuantumCircuit.ReferenceTests -c Release
 ```
 
 ## 5. Run locally
@@ -285,7 +406,7 @@ What the script does:
 1. **`main.bicep`** creates the storage account/file share, monitoring resources, Windows Workflow Standard plan, and Logic App Standard site with the .NET 8 in-process host settings.
 2. **`dotnet publish`** compiles the Q# library, both built-in connectors, workflow definitions, and simulator dependencies into `artifacts\publish`.
 3. **Zip deploy** publishes that package to the Logic App.
-4. The script obtains workflow callback URLs and smoke-tests `XGateDemoWorkflow`, all six beginner gate lessons, the visual Bell workflow, and all ten algorithm examples. It checks deterministic outcomes and valid probabilistic measurement sets without requiring an exact 50/50 split.
+4. The script obtains workflow callback URLs and smoke-tests `XGateDemoWorkflow`, all six beginner gate lessons, the reusable-operation workflow, the visual Bell workflow, and all ten algorithm examples. It checks typed inputs/results, deterministic outcomes, and valid probabilistic measurement sets without requiring an exact 50/50 split.
 
 ### CI/CD
 

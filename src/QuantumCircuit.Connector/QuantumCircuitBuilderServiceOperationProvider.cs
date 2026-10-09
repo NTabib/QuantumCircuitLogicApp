@@ -23,7 +23,7 @@ namespace QuantumCircuit.Connector
         private const uint BrandColor = 0x5C2D91;
         private static readonly Uri IconUri = new Uri("https://raw.githubusercontent.com/microsoft/qsharp/main/vscode/resources/qsharp.png");
 
-        private sealed record GateAction(string Id, string Label, string Gate, bool HasControl = false, bool HasControl2 = false, bool HasAngle = false, string IconLabel = "");
+        private sealed record GateAction(string Id, string Label, string Gate, bool HasControl = false, bool HasControl2 = false, bool HasAngle = false, bool HasMeasurementName = false, string IconLabel = "");
 
         private static readonly GateAction[] GateActions =
         {
@@ -42,6 +42,8 @@ namespace QuantumCircuit.Connector
             new("addRx", "Add rotation Rx", "RX", HasAngle: true, IconLabel: "Rx"),
             new("addRy", "Add rotation Ry", "RY", HasAngle: true, IconLabel: "Ry"),
             new("addRz", "Add rotation Rz", "RZ", HasAngle: true, IconLabel: "Rz"),
+            new("addMeasurement", "Measure qubit", "MEASURE", HasMeasurementName: true, IconLabel: "M"),
+            new("addReset", "Reset qubit", "RESET", IconLabel: "R"),
         };
 
         private static readonly Uri CircuitIconUri = CreateIconUri(
@@ -61,7 +63,7 @@ namespace QuantumCircuit.Connector
                 Properties = new ServiceOperationApiProperties
                 {
                     DisplayName = "Quantum Circuit Builder",
-                    Description = "Build quantum algorithms as visual gate steps, then execute the complete circuit once with the Q# executor.",
+                    Description = "Build visual circuit steps for gates, named measurements, resets, reusable operations, and measurement conditions; execute once with Q#.",
                     BrandColor = BrandColor,
                     IconUri = IconUri,
                     Capabilities = new[] { ApiCapability.Actions },
@@ -98,6 +100,44 @@ namespace QuantumCircuit.Connector
                 },
             }, new[] { "initialState" }, CircuitIconUri);
 
+            this.AddOperation("defineOperation", "Define reusable operation", new OrdinalDictionary<SwaggerSchema>
+            {
+                { "circuit", CircuitSchema() },
+                { "name", new SwaggerSchema { Type = SwaggerSchemaType.String, Title = "Operation name", Description = "Identifier used by later Call operation steps." } },
+                { "parameters", new SwaggerSchema
+                    {
+                        Type = SwaggerSchemaType.Array,
+                        Title = "Typed parameters",
+                        Description = "Parameter declarations currently support Int (qubit indices) and Double (rotation angles).",
+                        Items = new SwaggerSchema { Type = SwaggerSchemaType.Object, Description = "Object with string name and type fields (Int or Double)." },
+                    }
+                },
+                { "gates", new SwaggerSchema
+                    {
+                        Type = SwaggerSchemaType.Array,
+                        Title = "Operation gate template",
+                        Description = "Ordered gate instructions. Reference parameters with a whole-field string such as $target or $angle.",
+                        Items = new SwaggerSchema { Type = SwaggerSchemaType.Object, Description = "Gate object; operands may be numeric literals or typed parameter references." },
+                    }
+                },
+            }, new[] { "circuit", "name", "parameters", "gates" }, CircuitIconUri);
+
+            this.AddOperation("callOperation", "Call reusable operation", new OrdinalDictionary<SwaggerSchema>
+            {
+                { "circuit", CircuitSchema() },
+                { "name", new SwaggerSchema { Type = SwaggerSchemaType.String, Title = "Operation name", Description = "Previously defined reusable operation." } },
+                { "arguments", new SwaggerSchema { Type = SwaggerSchemaType.Object, Title = "Typed arguments", Description = "Object whose values match the operation's Int and Double parameter declarations." } },
+            }, new[] { "circuit", "name", "arguments" }, CircuitIconUri);
+
+            this.AddOperation("ifMeasurement", "If measurement result", new OrdinalDictionary<SwaggerSchema>
+            {
+                { "circuit", CircuitSchema() },
+                { "measurement", new SwaggerSchema { Type = SwaggerSchemaType.String, Title = "Earlier measurement name" } },
+                { "equals", new SwaggerSchema { Type = SwaggerSchemaType.Boolean, Title = "Measurement equals" } },
+                { "thenGates", new SwaggerSchema { Type = SwaggerSchemaType.Array, Title = "If branch gates", Description = "Primitive gates or calls to gate-only reusable operations; nested conditionals are not supported.", Items = new SwaggerSchema { Type = SwaggerSchemaType.Object } } },
+                { "elseGates", new SwaggerSchema { Type = SwaggerSchemaType.Array, Title = "Else branch gates", Description = "Optional primitive gates or reusable operation calls.", Items = new SwaggerSchema { Type = SwaggerSchemaType.Object } } },
+            }, new[] { "circuit", "measurement", "equals", "thenGates" }, CircuitIconUri);
+
             foreach (var gate in GateActions)
             {
                 var inputs = new OrdinalDictionary<SwaggerSchema>
@@ -106,6 +146,11 @@ namespace QuantumCircuit.Connector
                     { "target", IndexSchema("Target qubit") },
                 };
                 var required = new List<string> { "circuit", "target" };
+                if (gate.HasMeasurementName)
+                {
+                    inputs.Add("measurement", new SwaggerSchema { Type = SwaggerSchemaType.String, Title = "Measurement name", Description = "Unique identifier for this measurement; later conditions may reference it." });
+                    required.Add("measurement");
+                }
                 if (gate.HasControl)
                 {
                     inputs.Add("control", IndexSchema(gate.Gate == "SWAP" ? "Other qubit" : "Control qubit"));
@@ -149,8 +194,90 @@ namespace QuantumCircuit.Connector
                     {
                         throw new ArgumentException("initialState must be a bit string.");
                     }
-                    QuantumCircuitExecutor.ValidateCircuit(initialState.Value<string>(), new JArray());
-                    circuit = new JObject { ["initialState"] = initialState.DeepClone(), ["gates"] = new JArray() };
+                    QuantumCircuitExecutor.ValidateCircuit(initialState.Value<string>(), new JArray(), new JArray());
+                    circuit = new JObject { ["initialState"] = initialState.DeepClone(), ["gates"] = new JArray(), ["operations"] = new JArray() };
+                }
+                else if (string.Equals(operationId, "defineOperation", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (Required(parameters, "circuit") is not JObject input
+                        || input["initialState"]?.Type != JTokenType.String
+                        || input["gates"] is not JArray inputGates)
+                    {
+                        throw new ArgumentException("circuit must contain initialState and gates, as returned by a builder action.");
+                    }
+
+                    circuit = (JObject)input.DeepClone();
+                    var operationName = Required(parameters, "name");
+                    if (operationName.Type != JTokenType.String)
+                    {
+                        throw new ArgumentException("name must be a string.", "name");
+                    }
+
+                    var operations = GetCircuitOperations(input);
+                    operations.Add(new JObject
+                    {
+                        ["name"] = operationName.DeepClone(),
+                        ["parameters"] = RequiredArray(parameters, "parameters").DeepClone(),
+                        ["gates"] = RequiredArray(parameters, "gates").DeepClone(),
+                    });
+                    circuit["operations"] = operations;
+                    QuantumCircuitExecutor.ValidateCircuit(input["initialState"].Value<string>(), inputGates, operations);
+                }
+                else if (string.Equals(operationId, "callOperation", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (Required(parameters, "circuit") is not JObject input
+                        || input["initialState"]?.Type != JTokenType.String
+                        || input["gates"] is not JArray inputGates)
+                    {
+                        throw new ArgumentException("circuit must contain initialState and gates, as returned by a builder action.");
+                    }
+
+                    circuit = (JObject)input.DeepClone();
+                    var operationName = Required(parameters, "name");
+                    if (operationName.Type != JTokenType.String || Required(parameters, "arguments") is not JObject arguments)
+                    {
+                        throw new ArgumentException("name must be a string and arguments must be an object.");
+                    }
+
+                    var gates = (JArray)circuit["gates"];
+                    gates.Add(new JObject { ["gate"] = "CALL", ["operation"] = operationName.DeepClone(), ["arguments"] = arguments.DeepClone() });
+                    var operations = GetCircuitOperations(input);
+                    circuit["operations"] = operations;
+                    QuantumCircuitExecutor.ValidateCircuit(input["initialState"].Value<string>(), gates, operations);
+                }
+                else if (string.Equals(operationId, "ifMeasurement", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (Required(parameters, "circuit") is not JObject input
+                        || input["initialState"]?.Type != JTokenType.String
+                        || input["gates"] is not JArray inputGates)
+                    {
+                        throw new ArgumentException("circuit must contain initialState and gates, as returned by a builder action.");
+                    }
+
+                    var measurement = Required(parameters, "measurement");
+                    var equals = Required(parameters, "equals");
+                    if (measurement.Type != JTokenType.String || equals.Type != JTokenType.Boolean)
+                    {
+                        throw new ArgumentException("measurement must be a string and equals must be a Boolean.");
+                    }
+                    var thenGates = RequiredArray(parameters, "thenGates");
+                    var elseGates = parameters.TryGetValue("elseGates", out var optionalElseGates) && optionalElseGates != null
+                        ? optionalElseGates as JArray ?? throw new ArgumentException("'elseGates' must be an array.", "elseGates")
+                        : new JArray();
+
+                    circuit = (JObject)input.DeepClone();
+                    var gates = (JArray)circuit["gates"];
+                    gates.Add(new JObject
+                    {
+                        ["gate"] = "IF",
+                        ["measurement"] = measurement.DeepClone(),
+                        ["equals"] = equals.DeepClone(),
+                        ["then"] = thenGates.DeepClone(),
+                        ["else"] = elseGates.DeepClone(),
+                    });
+                    var inputOperations = GetCircuitOperations(input);
+                    circuit["operations"] = inputOperations;
+                    QuantumCircuitExecutor.ValidateCircuit(input["initialState"].Value<string>(), gates, inputOperations);
                 }
                 else
                 {
@@ -165,11 +292,21 @@ namespace QuantumCircuit.Connector
                     {
                         throw new ArgumentException("circuit must contain initialState (bit string) and gates (array), as returned by the previous builder action.");
                     }
-                    QuantumCircuitExecutor.ValidateCircuit(input["initialState"].Value<string>(), inputGates);
+                    var inputOperations = GetCircuitOperations(input);
+                    QuantumCircuitExecutor.ValidateCircuit(input["initialState"].Value<string>(), inputGates, inputOperations);
 
                     // Never mutate the input: retries produce the same gate list, not duplicate gates.
                     circuit = (JObject)input.DeepClone();
                     var instruction = new JObject { ["gate"] = gate.Gate, ["target"] = Integer(parameters, "target") };
+                    if (gate.HasMeasurementName)
+                    {
+                        var measurement = Required(parameters, "measurement");
+                        if (measurement.Type != JTokenType.String)
+                        {
+                            throw new ArgumentException("measurement must be a string identifier.", "measurement");
+                        }
+                        instruction["measurement"] = measurement.DeepClone();
+                    }
                     if (gate.HasControl) instruction["control"] = Integer(parameters, "control");
                     if (gate.HasControl2) instruction["control2"] = Integer(parameters, "control2");
                     if (gate.HasAngle)
@@ -182,7 +319,8 @@ namespace QuantumCircuit.Connector
                         instruction["angle"] = angle.DeepClone();
                     }
                     ((JArray)circuit["gates"]).Add(instruction);
-                    QuantumCircuitExecutor.ValidateCircuit(circuit["initialState"].Value<string>(), (JArray)circuit["gates"]);
+                    circuit["operations"] = inputOperations;
+                    QuantumCircuitExecutor.ValidateCircuit(circuit["initialState"].Value<string>(), (JArray)circuit["gates"], inputOperations);
                 }
                 return Task.FromResult(new ServiceOperationResponse(new JObject { ["circuit"] = circuit }, HttpStatusCode.OK));
             }
@@ -190,6 +328,31 @@ namespace QuantumCircuit.Connector
             {
                 throw new ServiceOperationsProviderException(HttpStatusCode.BadRequest, ServiceOperationsErrorResponseCode.ServiceOperationInvalidParameter, ex.Message, ex);
             }
+        }
+
+        private static JArray RequiredArray(InsensitiveDictionary<JToken> parameters, string name)
+        {
+            if (Required(parameters, name) is not JArray array)
+            {
+                throw new ArgumentException($"'{name}' must be an array.", name);
+            }
+
+            return array;
+        }
+
+        private static JArray GetCircuitOperations(JObject circuit)
+        {
+            if (circuit["operations"] == null)
+            {
+                return new JArray();
+            }
+
+            if (circuit["operations"] is not JArray operations)
+            {
+                throw new ArgumentException("circuit.operations must be an array.", "circuit");
+            }
+
+            return (JArray)operations.DeepClone();
         }
 
         private static JToken Required(InsensitiveDictionary<JToken> parameters, string name)
@@ -224,24 +387,51 @@ namespace QuantumCircuit.Connector
                 { "gates", new SwaggerSchema
                     {
                         Type = SwaggerSchemaType.Array,
-                        Title = "Gate instructions",
-                        Items = new SwaggerSchema
-                        {
-                            Type = SwaggerSchemaType.Object,
-                            Properties = new OrdinalDictionary<SwaggerSchema>
-                            {
-                                { "gate", new SwaggerSchema { Type = SwaggerSchemaType.String, Title = "Gate name" } },
-                                { "target", IndexSchema("Target") },
-                                { "control", IndexSchema("Control") },
-                                { "control2", IndexSchema("Second control") },
-                                { "angle", new SwaggerSchema { Type = SwaggerSchemaType.Number, Title = "Angle (radians)" } },
-                            },
-                            Required = new[] { "gate", "target" },
-                        },
+                        Title = "Ordered circuit instructions",
+                        Description = "The final circuit can contain gates, reusable calls, named measurements, resets, and bounded IF measurement branches.",
+                        Items = new SwaggerSchema { Type = SwaggerSchemaType.Object, Description = "Gate, reusable call, MEASURE, RESET, or IF instruction." },
                     }
                 },
+                { "operations", OperationDefinitionsSchema() },
             },
             Required = new[] { "initialState", "gates" },
+        };
+
+        private static SwaggerSchema OperationDefinitionsSchema() => new SwaggerSchema
+        {
+            Type = SwaggerSchemaType.Array,
+            Title = "Reusable operations",
+            Description = "Named gate templates with typed Int and Double parameters.",
+            Items = new SwaggerSchema
+            {
+                Type = SwaggerSchemaType.Object,
+                Properties = new OrdinalDictionary<SwaggerSchema>
+                {
+                    { "name", new SwaggerSchema { Type = SwaggerSchemaType.String, Title = "Operation name" } },
+                    { "parameters", new SwaggerSchema
+                        {
+                            Type = SwaggerSchemaType.Array,
+                            Title = "Typed parameters",
+                            Items = new SwaggerSchema
+                            {
+                                Type = SwaggerSchemaType.Object,
+                                Properties = new OrdinalDictionary<SwaggerSchema>
+                                {
+                                    { "name", new SwaggerSchema { Type = SwaggerSchemaType.String, Title = "Parameter name" } },
+                                    { "type", new SwaggerSchema { Type = SwaggerSchemaType.String, Title = "Parameter type", Description = "Int or Double." } },
+                                },
+                            },
+                        }
+                    },
+                    { "gates", new SwaggerSchema
+                        {
+                            Type = SwaggerSchemaType.Array,
+                            Title = "Gate template",
+                            Items = new SwaggerSchema { Type = SwaggerSchemaType.Object, Description = "Use whole-field references such as $target and $angle." },
+                        }
+                    },
+                },
+            },
         };
 
         private static Uri CreateGateIconUri(GateAction gate)

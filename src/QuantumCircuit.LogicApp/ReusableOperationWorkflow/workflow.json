@@ -1,0 +1,143 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "triggers": {
+      "When_a_HTTP_request_is_received": {
+        "type": "Request",
+        "kind": "Http",
+        "inputs": {
+          "method": "POST",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "shots": { "type": "integer", "minimum": 1, "maximum": 1000, "description": "Complete-circuit executions; defaults to 100." }
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "Reusable_operation_lesson": {
+        "type": "Scope",
+        "runAfter": {},
+        "actions": {
+          "Create_circuit": {
+            "type": "ServiceProvider",
+            "runAfter": {},
+            "inputs": {
+              "parameters": { "initialState": "00" },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "createCircuit",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Define_RotateY_operation": {
+            "type": "ServiceProvider",
+            "runAfter": { "Create_circuit": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": {
+                "circuit": "@body('Create_circuit')?['circuit']",
+                "name": "RotateYByAngle",
+                "parameters": [
+                  { "name": "target", "type": "Int" },
+                  { "name": "angle", "type": "Double" }
+                ],
+                "gates": [
+                  { "gate": "RY", "target": "$target", "angle": "$angle" }
+                ]
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "defineOperation",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Call_RotateY_on_qubit_0": {
+            "type": "ServiceProvider",
+            "runAfter": { "Define_RotateY_operation": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": {
+                "circuit": "@body('Define_RotateY_operation')?['circuit']",
+                "name": "RotateYByAngle",
+                "arguments": { "target": 0, "angle": 1.5707963267948966 }
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "callOperation",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Call_RotateY_on_qubit_1": {
+            "type": "ServiceProvider",
+            "runAfter": { "Call_RotateY_on_qubit_0": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": {
+                "circuit": "@body('Call_RotateY_on_qubit_0')?['circuit']",
+                "name": "RotateYByAngle",
+                "arguments": { "target": 1, "angle": 1.5707963267948966 }
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "callOperation",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Execute_complete_circuit": {
+            "type": "ServiceProvider",
+            "runAfter": { "Call_RotateY_on_qubit_1": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": {
+                "initialState": "@body('Call_RotateY_on_qubit_1')?['circuit']?['initialState']",
+                "gates": "@body('Call_RotateY_on_qubit_1')?['circuit']?['gates']",
+                "operations": "@body('Call_RotateY_on_qubit_1')?['circuit']?['operations']",
+                "shots": "@coalesce(triggerBody()?['shots'], 100)"
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuit",
+                "operationId": "runCircuit",
+                "serviceProviderId": "/serviceProviders/quantumCircuit"
+              }
+            }
+          }
+        }
+      },
+      "Success_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": { "Reusable_operation_lesson": [ "Succeeded" ] },
+        "inputs": {
+          "statusCode": 200,
+          "headers": { "Content-Type": "application/json" },
+          "body": {
+            "lesson": {
+              "id": "ReusableOperation",
+              "title": "Define once, call with typed arguments",
+              "concept": "RotateYByAngle is a reusable gate template. Each call supplies an Int qubit index and a Double angle; the executor expands both calls and runs one coherent Q# circuit.",
+              "expected": "Applying Ry(pi/2) to both qubits produces four equally likely basis outcomes. Measurements are returned as Boolean arrays, one per shot."
+            },
+            "circuit": "@body('Call_RotateY_on_qubit_1')?['circuit']",
+            "circuitResult": "@body('Execute_complete_circuit')"
+          }
+        }
+      },
+      "Failure_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": { "Reusable_operation_lesson": [ "Failed", "TimedOut" ] },
+        "inputs": {
+          "statusCode": 400,
+          "headers": { "Content-Type": "application/json" },
+          "body": { "lesson": "ReusableOperation", "error": "The reusable operation lesson failed.", "details": "@result('Reusable_operation_lesson')" }
+        }
+      }
+    },
+    "outputs": {}
+  },
+  "kind": "Stateful"
+}

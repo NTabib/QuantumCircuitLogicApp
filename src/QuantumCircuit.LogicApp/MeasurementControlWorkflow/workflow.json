@@ -1,0 +1,176 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "triggers": {
+      "When_a_HTTP_request_is_received": {
+        "type": "Request",
+        "kind": "Http",
+        "inputs": {
+          "method": "POST",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "shots": { "type": "integer", "minimum": 1, "maximum": 1000, "description": "Complete-circuit executions; defaults to 20." }
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "Measurement_reset_and_control_lesson": {
+        "type": "Scope",
+        "runAfter": {},
+        "actions": {
+          "Create_circuit": {
+            "type": "ServiceProvider",
+            "runAfter": {},
+            "inputs": {
+              "parameters": { "initialState": "00" },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "createCircuit",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Measure_initial_zero": {
+            "type": "ServiceProvider",
+            "runAfter": { "Create_circuit": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": {
+                "circuit": "@body('Create_circuit')?['circuit']",
+                "target": 0,
+                "measurement": "measuredZero"
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addMeasurement",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Flip_qubit_0": {
+            "type": "ServiceProvider",
+            "runAfter": { "Measure_initial_zero": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('Measure_initial_zero')?['circuit']", "target": 0 },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addX",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Measure_flipped_one": {
+            "type": "ServiceProvider",
+            "runAfter": { "Flip_qubit_0": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": {
+                "circuit": "@body('Flip_qubit_0')?['circuit']",
+                "target": 0,
+                "measurement": "measuredOne"
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addMeasurement",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Reset_qubit_0": {
+            "type": "ServiceProvider",
+            "runAfter": { "Measure_flipped_one": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('Measure_flipped_one')?['circuit']", "target": 0 },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addReset",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "If_measured_one": {
+            "type": "ServiceProvider",
+            "runAfter": { "Reset_qubit_0": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": {
+                "circuit": "@body('Reset_qubit_0')?['circuit']",
+                "measurement": "measuredOne",
+                "equals": true,
+                "thenGates": [{ "gate": "X", "target": 1 }],
+                "elseGates": [{ "gate": "X", "target": 0 }]
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "ifMeasurement",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "If_measured_zero": {
+            "type": "ServiceProvider",
+            "runAfter": { "If_measured_one": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": {
+                "circuit": "@body('If_measured_one')?['circuit']",
+                "measurement": "measuredZero",
+                "equals": true,
+                "thenGates": [{ "gate": "X", "target": 0 }],
+                "elseGates": [{ "gate": "X", "target": 1 }]
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "ifMeasurement",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Execute_reference_circuit": {
+            "type": "ServiceProvider",
+            "runAfter": { "If_measured_zero": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": {
+                "initialState": "@body('If_measured_zero')?['circuit']?['initialState']",
+                "gates": "@body('If_measured_zero')?['circuit']?['gates']",
+                "operations": "@body('If_measured_zero')?['circuit']?['operations']",
+                "shots": "@coalesce(triggerBody()?['shots'], 20)"
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuit",
+                "operationId": "runCircuit",
+                "serviceProviderId": "/serviceProviders/quantumCircuit"
+              }
+            }
+          }
+        }
+      },
+      "Success_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": { "Measurement_reset_and_control_lesson": [ "Succeeded" ] },
+        "inputs": {
+          "statusCode": 200,
+          "headers": { "Content-Type": "application/json" },
+          "body": {
+            "referenceProgram": "M(q0); X(q0); M(q0); Reset(q0); if measuredOne then X(q1) else X(q0); if measuredZero then X(q0) else X(q1).",
+            "circuit": "@body('If_measured_zero')?['circuit']",
+            "circuitResult": "@body('Execute_reference_circuit')"
+          }
+        }
+      },
+      "Failure_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": { "Measurement_reset_and_control_lesson": [ "Failed", "TimedOut" ] },
+        "inputs": {
+          "statusCode": 400,
+          "headers": { "Content-Type": "application/json" },
+          "body": { "lesson": "MeasurementControl", "error": "The measurement/reset/control-flow lesson failed.", "details": "@result('Measurement_reset_and_control_lesson')" }
+        }
+      }
+    },
+    "outputs": {}
+  },
+  "kind": "Stateful"
+}

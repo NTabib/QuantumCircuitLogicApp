@@ -1,8 +1,8 @@
 <#
 .SYNOPSIS
   Provisions the Azure infrastructure, builds the Q# library + custom connector + Logic App,
-  deploys the package to Logic Apps Standard and tests the X-gate, beginner gate lessons,
-  visual circuit, and ten quantum algorithm demonstration workflows.
+  deploys the package to Logic Apps Standard and tests teleportation, measurement/reset/branching,
+  the X-gate, beginner lessons, reusable typed operations, visual circuits, and algorithms.
 
 .EXAMPLE
   .\deploy.ps1 -ResourceGroup rg-quantum-circuit -Location westeurope
@@ -40,11 +40,15 @@ function Get-WorkflowCallbackUrl([string] $WorkflowName) {
 
 . (Join-Path $PSScriptRoot 'Test-AlgorithmWorkflows.ps1')
 
+Invoke-Checked {
+	dotnet run --project (Join-Path $root 'tests\QuantumCircuit.ReferenceTests\QuantumCircuit.ReferenceTests.csproj') -c Release
+} 'Comparing circuit execution with the native Q# reference program'
+
 if ($SubscriptionId) {
 	Invoke-Checked { az account set --subscription $SubscriptionId } 'Selecting subscription'
 }
 
-# 1. Infrastructure (Storage, App Insights, WS1 plan, Logic App Standard)
+# 1. Infrastructure
 Invoke-Checked { az group create --name $ResourceGroup --location $Location --output none } 'Creating resource group'
 
 Write-Host '==> Deploying main.bicep' -ForegroundColor Cyan
@@ -147,6 +151,24 @@ Test-BeginnerGateWorkflows -GetCallbackUrl {
 	param($workflowName)
 	Get-WorkflowCallbackUrl $workflowName
 } -Shots 100
+
+. (Join-Path $PSScriptRoot 'Test-ReusableOperationWorkflow.ps1')
+Test-ReusableOperationWorkflow -GetCallbackUrl {
+	param($workflowName)
+	Get-WorkflowCallbackUrl $workflowName
+} -Shots 100
+
+. (Join-Path $PSScriptRoot 'Test-MeasurementControlWorkflow.ps1')
+Test-MeasurementControlWorkflow -GetCallbackUrl {
+	param($workflowName)
+	Get-WorkflowCallbackUrl $workflowName
+} -Shots 20
+
+. (Join-Path $PSScriptRoot 'Test-TeleportationWorkflow.ps1')
+Test-TeleportationWorkflow -GetCallbackUrl {
+	param($workflowName)
+	Get-WorkflowCallbackUrl $workflowName
+} -Shots 200
 Write-Host ''
 Write-Host "XGateDemoWorkflow URL (keep it secret, it contains a SAS key):" -ForegroundColor Yellow
 Write-Host $callbackUrl

@@ -1,0 +1,242 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "triggers": {
+      "When_a_HTTP_request_is_received": {
+        "type": "Request",
+        "kind": "Http",
+        "inputs": {
+          "method": "POST",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "shots": { "type": "integer", "minimum": 1, "maximum": 1000, "description": "Teleportation runs; defaults to 100." }
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "Quantum_teleportation": {
+        "type": "Scope",
+        "runAfter": {},
+        "actions": {
+          "Create_circuit": {
+            "type": "ServiceProvider",
+            "runAfter": {},
+            "inputs": {
+              "parameters": { "initialState": "000" },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "createCircuit",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Prepare_input_plus": {
+            "type": "ServiceProvider",
+            "runAfter": { "Create_circuit": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('Create_circuit')?['circuit']", "target": 0 },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addHadamard",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Prepare_bell_pair": {
+            "type": "ServiceProvider",
+            "runAfter": { "Prepare_input_plus": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('Prepare_input_plus')?['circuit']", "target": 1 },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addHadamard",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Entangle_bob_qubit": {
+            "type": "ServiceProvider",
+            "runAfter": { "Prepare_bell_pair": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('Prepare_bell_pair')?['circuit']", "control": 1, "target": 2 },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addCnot",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Bell_basis_cnot": {
+            "type": "ServiceProvider",
+            "runAfter": { "Entangle_bob_qubit": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('Entangle_bob_qubit')?['circuit']", "control": 0, "target": 1 },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addCnot",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Bell_basis_hadamard": {
+            "type": "ServiceProvider",
+            "runAfter": { "Bell_basis_cnot": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('Bell_basis_cnot')?['circuit']", "target": 0 },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addHadamard",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Measure_alice_bit_0": {
+            "type": "ServiceProvider",
+            "runAfter": { "Bell_basis_hadamard": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('Bell_basis_hadamard')?['circuit']", "target": 0, "measurement": "m0" },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addMeasurement",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Measure_alice_bit_1": {
+            "type": "ServiceProvider",
+            "runAfter": { "Measure_alice_bit_0": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('Measure_alice_bit_0')?['circuit']", "target": 1, "measurement": "m1" },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addMeasurement",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Reset_alice_qubit_0": {
+            "type": "ServiceProvider",
+            "runAfter": { "Measure_alice_bit_1": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('Measure_alice_bit_1')?['circuit']", "target": 0 },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addReset",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Reset_alice_qubit_1": {
+            "type": "ServiceProvider",
+            "runAfter": { "Reset_alice_qubit_0": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('Reset_alice_qubit_0')?['circuit']", "target": 1 },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addReset",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Correct_x_from_m1": {
+            "type": "ServiceProvider",
+            "runAfter": { "Reset_alice_qubit_1": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": {
+                "circuit": "@body('Reset_alice_qubit_1')?['circuit']",
+                "measurement": "m1",
+                "equals": true,
+                "thenGates": [{ "gate": "X", "target": 2 }],
+                "elseGates": []
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "ifMeasurement",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Correct_z_from_m0": {
+            "type": "ServiceProvider",
+            "runAfter": { "Correct_x_from_m1": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": {
+                "circuit": "@body('Correct_x_from_m1')?['circuit']",
+                "measurement": "m0",
+                "equals": true,
+                "thenGates": [{ "gate": "Z", "target": 2 }],
+                "elseGates": []
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "ifMeasurement",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Verify_plus_state_in_x_basis": {
+            "type": "ServiceProvider",
+            "runAfter": { "Correct_z_from_m0": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('Correct_z_from_m0')?['circuit']", "target": 2 },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addHadamard",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Execute_teleportation": {
+            "type": "ServiceProvider",
+            "runAfter": { "Verify_plus_state_in_x_basis": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": {
+                "initialState": "@body('Verify_plus_state_in_x_basis')?['circuit']?['initialState']",
+                "gates": "@body('Verify_plus_state_in_x_basis')?['circuit']?['gates']",
+                "operations": "@body('Verify_plus_state_in_x_basis')?['circuit']?['operations']",
+                "shots": "@coalesce(triggerBody()?['shots'], 100)"
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuit",
+                "operationId": "runCircuit",
+                "serviceProviderId": "/serviceProviders/quantumCircuit"
+              }
+            }
+          }
+        }
+      },
+      "Success_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": { "Quantum_teleportation": [ "Succeeded" ] },
+        "inputs": {
+          "statusCode": 200,
+          "headers": { "Content-Type": "application/json" },
+          "body": {
+            "algorithm": "QuantumTeleportation",
+            "inputState": "|+>",
+            "explanation": "Qubits 0 and 1 are Bell-measured; m1 controls X and m0 controls Z on Bob's qubit 2. A final H and Z measurement verifies Bob's teleported |+> state in the X basis; every shot should return 000.",
+            "circuit": "@body('Verify_plus_state_in_x_basis')?['circuit']",
+            "circuitResult": "@body('Execute_teleportation')"
+          }
+        }
+      },
+      "Failure_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": { "Quantum_teleportation": [ "Failed", "TimedOut" ] },
+        "inputs": {
+          "statusCode": 400,
+          "headers": { "Content-Type": "application/json" },
+          "body": { "algorithm": "QuantumTeleportation", "error": "The teleportation workflow failed.", "details": "@result('Quantum_teleportation')" }
+        }
+      }
+    },
+    "outputs": {}
+  },
+  "kind": "Stateful"
+}
