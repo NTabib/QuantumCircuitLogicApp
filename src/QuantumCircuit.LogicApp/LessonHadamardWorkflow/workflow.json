@@ -1,0 +1,95 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "triggers": {
+      "When_a_HTTP_request_is_received": {
+        "type": "Request",
+        "kind": "Http",
+        "inputs": {
+          "method": "POST",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "shots": { "type": "integer", "minimum": 1, "maximum": 1000, "description": "Complete-circuit executions; defaults to 100." }
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "Lesson": {
+        "type": "Scope",
+        "runAfter": {},
+        "actions": {
+          "Create_circuit": {
+            "type": "ServiceProvider",
+            "runAfter": {},
+            "inputs": {
+              "parameters": { "initialState": "0" },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "createCircuit",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Add_Hadamard": {
+            "type": "ServiceProvider",
+            "runAfter": { "Create_circuit": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('Create_circuit')?['circuit']", "target": 0 },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addHadamard",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Execute_circuit": {
+            "type": "ServiceProvider",
+            "runAfter": { "Add_Hadamard": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": {
+                "initialState": "@body('Add_Hadamard')?['circuit']?['initialState']",
+                "gates": "@body('Add_Hadamard')?['circuit']?['gates']",
+                "shots": "@coalesce(triggerBody()?['shots'], 100)"
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuit",
+                "operationId": "runCircuit",
+                "serviceProviderId": "/serviceProviders/quantumCircuit"
+              }
+            }
+          }
+        }
+      },
+      "Success_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": { "Lesson": [ "Succeeded" ] },
+        "inputs": {
+          "statusCode": 200,
+          "headers": { "Content-Type": "application/json" },
+          "body": {
+            "lesson": { "id": "Hadamard", "title": "The H gate creates superposition", "concept": "H maps |0> to (|0> + |1>)/sqrt(2). One measurement is random even though the state before measurement is a predictable superposition.", "expected": "Counts for 0 and 1 are each approximately half of the shots." },
+            "circuit": "@body('Add_Hadamard')?['circuit']",
+            "circuitResult": "@body('Execute_circuit')"
+          }
+        }
+      },
+      "Failure_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": { "Lesson": [ "Failed", "TimedOut" ] },
+        "inputs": {
+          "statusCode": 400,
+          "headers": { "Content-Type": "application/json" },
+          "body": { "lesson": "Hadamard", "error": "The Hadamard gate lesson failed.", "details": "@result('Lesson')" }
+        }
+      }
+    },
+    "outputs": {}
+  },
+  "kind": "Stateful"
+}

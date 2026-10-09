@@ -23,6 +23,7 @@ QuantumCircuitLogicApp/
 │  └─ QuantumCircuit.LogicApp/         # NuGet-based Logic Apps Standard project
 │     ├─ host.json / connections.json / local.settings.json
 │     ├─ XGateDemoWorkflow/workflow.json  # X built with generic createCircuit/addX/runCircuit
+│     ├─ Lesson*Workflow/workflow.json     # beginner gate lessons with explanations
 │     ├─ QuantumCircuitWorkflow/workflow.json
 │     └─ VisualQuantumCircuitWorkflow/workflow.json # visual gate steps -> executor
 └─ deploy/
@@ -45,8 +46,9 @@ The project uses classic `Microsoft.Quantum.Sdk` (QDK 0.28). The Q# compiler gen
 The NuGet-based Logic Apps Standard host registers two service-provider connectors:
 
 * **Quantum Circuit Builder** (`quantumCircuitBuilder`) exposes `createCircuit` and 15 `add...`
-  actions, including `addX`. Every gate action validates and appends one classical instruction to an
-  immutable circuit descriptor; it does not allocate, measure, or mutate a live qubit.
+  actions, including `addX`. Each action has its own embedded SVG icon (gate symbol or controlled-gate
+  diagram) in the Logic Apps designer. Every gate action validates and appends one classical
+  instruction to an immutable circuit descriptor; it does not allocate, measure, or mutate a live qubit.
 * **Quantum Circuit** (`quantumCircuit`) exposes `runCircuit`. `QuantumCircuitExecutor` validates the
   complete descriptor, maps gate instructions to Q# arguments, runs each shot, and aggregates counts.
 
@@ -93,6 +95,34 @@ chaining gate actions before the final `runCircuit` action.
 
 The visual Bell workflow remains a separate example (`VisualQuantumCircuitWorkflow`): it builds
 `H(0) -> CNOT(0,1)` and measures only after both gates have executed coherently.
+
+## Beginner gate lessons
+
+Six small stateful workflows introduce core gate behavior. Each shows the individual builder actions
+in the Logic Apps designer, executes the complete circuit once per shot, and returns a `lesson`
+explanation, the assembled `circuit`, and a measurement histogram in `circuitResult`.
+
+| Workflow | Gate steps | What to notice |
+|---|---|---|
+| `LessonPauliXWorkflow` | X on `|0>` | A basis-state bit flip: every shot returns `1`. |
+| `LessonHadamardWorkflow` | H on `|0>` | Superposition gives approximately equal counts for `0` and `1`. |
+| `LessonPhaseInterferenceWorkflow` | H -> Z -> H on `|0>` | Z changes relative phase; the second H makes it observable as `1`. |
+| `LessonCnotWorkflow` | CNOT, control qubit 0 -> target qubit 1, input `|10>` | A control in `1` flips the target, giving `11`. |
+| `LessonBellStateWorkflow` | H on qubit 0 -> CNOT(0,1) | Entangled outcomes are correlated: only `00` or `11`. |
+| `LessonRotationWorkflow` | Ry(pi/2) on `|0>` | Rotation angles use radians; pi/2 produces equal measurement probabilities. |
+
+POST `{}` or `{"shots":200}` to a lesson's HTTP Request trigger; the shot count defaults to 100.
+For example, with a local host on port 7071:
+
+```powershell
+$url = (Invoke-RestMethod -Method Post 'http://localhost:7071/runtime/webhooks/workflow/api/management/workflows/LessonPhaseInterferenceWorkflow/triggers/When_a_HTTP_request_is_received/listCallbackUrl?api-version=2020-05-01-preview').value
+Invoke-RestMethod -Method Post -Uri $url -ContentType application/json -Body '{"shots":100}'
+```
+
+The workflow's `lesson` describes the idea, while `circuit.gates` shows each visual builder step
+and `circuitResult.counts` shows the measurements. Open a lesson workflow in the Logic Apps designer
+to trace the Create -> Add gate(s) -> Execute sequence. `deploy\deploy.ps1` runs deterministic and
+probabilistic assertions for all six lessons through `Test-BeginnerGateWorkflows.ps1`.
 
 ## 4. Coherent circuit workflow (`QuantumCircuitWorkflow`)
 
@@ -165,8 +195,9 @@ sequentially; parallel branches are separate circuits and are not automatically 
 
 All gates run coherently in one Q# invocation per shot, with measurement only at the end. This is
 visual circuit construction, not a persistent quantum session, and does not support branching on
-intermediate measurements. The deployment script publishes the builder, executor, X demo, visual
-workflow, and ten algorithm examples together; no additional Azure resources are required.
+intermediate measurements. The deployment script publishes the builder, executor, X demo, six
+beginner gate lessons, visual workflow, and ten algorithm examples together; no additional Azure
+resources are required.
 
 With the local host running on port 7071, invoke the visual workflow:
 
@@ -208,8 +239,9 @@ factoring are not included.
 
 `deploy\Test-AlgorithmWorkflows.ps1` supplies algorithm-specific assertions. `deploy.ps1` runs them
 after publishing, including QFT reversibility, phase recovery, Simon's finite-shot recovery rule,
-and VQE/QAOA objectives recomputed from their measurements. It checks shot totals and allowed
-outcomes without requiring an exact random 50/50 split. All workflows use the Q# full-state simulator.
+and VQE/QAOA objectives recomputed from their measurements. `deploy\Test-BeginnerGateWorkflows.ps1`
+checks the six introductory gate circuits, shot totals and allowed outcomes without requiring an exact
+random 50/50 split. All workflows use the Q# full-state simulator.
 
 To run the same suite against a local host without provisioning Azure:
 
@@ -253,7 +285,7 @@ What the script does:
 1. **`main.bicep`** creates the storage account/file share, monitoring resources, Windows Workflow Standard plan, and Logic App Standard site with the .NET 8 in-process host settings.
 2. **`dotnet publish`** compiles the Q# library, both built-in connectors, workflow definitions, and simulator dependencies into `artifacts\publish`.
 3. **Zip deploy** publishes that package to the Logic App.
-4. The script obtains workflow callback URLs and smoke-tests `XGateDemoWorkflow` through `createCircuit -> addX -> runCircuit`, the visual Bell workflow, and all ten algorithm examples. The X check verifies that `X|0>` returns only `1`; probabilistic checks allow sampling variation.
+4. The script obtains workflow callback URLs and smoke-tests `XGateDemoWorkflow`, all six beginner gate lessons, the visual Bell workflow, and all ten algorithm examples. It checks deterministic outcomes and valid probabilistic measurement sets without requiring an exact 50/50 split.
 
 ### CI/CD
 

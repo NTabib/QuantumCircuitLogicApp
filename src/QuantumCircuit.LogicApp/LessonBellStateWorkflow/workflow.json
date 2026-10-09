@@ -1,0 +1,107 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "triggers": {
+      "When_a_HTTP_request_is_received": {
+        "type": "Request",
+        "kind": "Http",
+        "inputs": {
+          "method": "POST",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "shots": { "type": "integer", "minimum": 1, "maximum": 1000, "description": "Complete-circuit executions; defaults to 100." }
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "Lesson": {
+        "type": "Scope",
+        "runAfter": {},
+        "actions": {
+          "Create_circuit": {
+            "type": "ServiceProvider",
+            "runAfter": {},
+            "inputs": {
+              "parameters": { "initialState": "00" },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "createCircuit",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Add_Hadamard": {
+            "type": "ServiceProvider",
+            "runAfter": { "Create_circuit": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('Create_circuit')?['circuit']", "target": 0 },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addHadamard",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Add_CNOT": {
+            "type": "ServiceProvider",
+            "runAfter": { "Add_Hadamard": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('Add_Hadamard')?['circuit']", "control": 0, "target": 1 },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addCnot",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Execute_circuit": {
+            "type": "ServiceProvider",
+            "runAfter": { "Add_CNOT": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": {
+                "initialState": "@body('Add_CNOT')?['circuit']?['initialState']",
+                "gates": "@body('Add_CNOT')?['circuit']?['gates']",
+                "shots": "@coalesce(triggerBody()?['shots'], 100)"
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuit",
+                "operationId": "runCircuit",
+                "serviceProviderId": "/serviceProviders/quantumCircuit"
+              }
+            }
+          }
+        }
+      },
+      "Success_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": { "Lesson": [ "Succeeded" ] },
+        "inputs": {
+          "statusCode": 200,
+          "headers": { "Content-Type": "application/json" },
+          "body": {
+            "lesson": { "id": "BellState", "title": "Entanglement links two qubits", "concept": "H on qubit 0 followed by CNOT creates (|00> + |11>)/sqrt(2). The individual outcomes are random but perfectly correlated.", "expected": "Only 00 and 11 occur, approximately half of each over many shots." },
+            "circuit": "@body('Add_CNOT')?['circuit']",
+            "circuitResult": "@body('Execute_circuit')"
+          }
+        }
+      },
+      "Failure_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": { "Lesson": [ "Failed", "TimedOut" ] },
+        "inputs": {
+          "statusCode": 400,
+          "headers": { "Content-Type": "application/json" },
+          "body": { "lesson": "BellState", "error": "The Bell-state lesson failed.", "details": "@result('Lesson')" }
+        }
+      }
+    },
+    "outputs": {}
+  },
+  "kind": "Stateful"
+}

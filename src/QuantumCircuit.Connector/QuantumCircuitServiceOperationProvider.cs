@@ -30,6 +30,7 @@ namespace QuantumCircuit.Connector
         private const uint BrandColor = 0x5C2D91;
 
         private static readonly Uri IconUri = new Uri("https://raw.githubusercontent.com/microsoft/qsharp/main/vscode/resources/qsharp.png");
+        private static readonly Uri RunCircuitIconUri = CreateRunCircuitIconUri();
 
         private readonly ServiceOperationApi serviceOperationApi;
 
@@ -41,7 +42,7 @@ namespace QuantumCircuit.Connector
         {
             this.serviceOperationApi = BuildServiceOperationApi();
 
-            var runCircuit = this.BuildOperation(RunCircuitOperationId, "Run a quantum circuit", "Executes a sequence of Q# gates before measuring, preserving superposition and entanglement within the circuit.");
+            var runCircuit = this.BuildOperation(RunCircuitOperationId, "Run a quantum circuit", "Executes a sequence of Q# gates before measuring, preserving superposition and entanglement within the circuit.", RunCircuitIconUri);
 
             this.apiOperations = new InsensitiveDictionary<ServiceOperation>
             {
@@ -170,7 +171,14 @@ namespace QuantumCircuit.Connector
             },
         };
 
-        private ServiceOperation BuildOperation(string id, string summary, string description) => new ServiceOperation
+        private static Uri CreateRunCircuitIconUri()
+        {
+            const string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 32 32\"><rect x=\"1\" y=\"1\" width=\"30\" height=\"30\" rx=\"7\" fill=\"#F3E8FF\" stroke=\"#5C2D91\" stroke-width=\"1.5\"/><path d=\"M8 10h7M8 16h5M8 22h7\" stroke=\"#5C2D91\" stroke-width=\"2\" stroke-linecap=\"round\"/><path d=\"m17 10 8 6-8 6z\" fill=\"#5C2D91\"/></svg>";
+            var encodedSvg = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(svg));
+            return new Uri($"data:image/svg+xml;base64,{encodedSvg}", UriKind.Absolute);
+        }
+
+        private ServiceOperation BuildOperation(string id, string summary, string description, Uri iconUri) => new ServiceOperation
         {
             Name = id,
             Id = id,
@@ -183,7 +191,7 @@ namespace QuantumCircuit.Connector
                 Visibility = Visibility.Important,
                 OperationType = OperationType.ServiceProvider,
                 BrandColor = BrandColor,
-                IconUri = IconUri,
+                IconUri = iconUri,
             },
         };
 

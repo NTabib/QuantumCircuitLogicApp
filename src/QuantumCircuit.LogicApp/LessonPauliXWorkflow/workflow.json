@@ -1,0 +1,95 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "triggers": {
+      "When_a_HTTP_request_is_received": {
+        "type": "Request",
+        "kind": "Http",
+        "inputs": {
+          "method": "POST",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "shots": { "type": "integer", "minimum": 1, "maximum": 1000, "description": "Complete-circuit executions; defaults to 100." }
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "Lesson": {
+        "type": "Scope",
+        "runAfter": {},
+        "actions": {
+          "Create_circuit": {
+            "type": "ServiceProvider",
+            "runAfter": {},
+            "inputs": {
+              "parameters": { "initialState": "0" },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "createCircuit",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Add_X": {
+            "type": "ServiceProvider",
+            "runAfter": { "Create_circuit": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('Create_circuit')?['circuit']", "target": 0 },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addX",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Execute_circuit": {
+            "type": "ServiceProvider",
+            "runAfter": { "Add_X": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": {
+                "initialState": "@body('Add_X')?['circuit']?['initialState']",
+                "gates": "@body('Add_X')?['circuit']?['gates']",
+                "shots": "@coalesce(triggerBody()?['shots'], 100)"
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuit",
+                "operationId": "runCircuit",
+                "serviceProviderId": "/serviceProviders/quantumCircuit"
+              }
+            }
+          }
+        }
+      },
+      "Success_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": { "Lesson": [ "Succeeded" ] },
+        "inputs": {
+          "statusCode": 200,
+          "headers": { "Content-Type": "application/json" },
+          "body": {
+            "lesson": { "id": "PauliX", "title": "The X gate flips a qubit", "concept": "X swaps |0> and |1>, like a NOT gate on basis states.", "expected": "Starting at |0>, every measurement is 1." },
+            "circuit": "@body('Add_X')?['circuit']",
+            "circuitResult": "@body('Execute_circuit')"
+          }
+        }
+      },
+      "Failure_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": { "Lesson": [ "Failed", "TimedOut" ] },
+        "inputs": {
+          "statusCode": 400,
+          "headers": { "Content-Type": "application/json" },
+          "body": { "lesson": "PauliX", "error": "The X gate lesson failed.", "details": "@result('Lesson')" }
+        }
+      }
+    },
+    "outputs": {}
+  },
+  "kind": "Stateful"
+}

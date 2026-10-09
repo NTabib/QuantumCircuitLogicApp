@@ -4,6 +4,7 @@ namespace QuantumCircuit.Connector
     using System.Collections.Generic;
     using System.Linq;
     using System.Net;
+    using System.Text;
     using System.Threading.Tasks;
     using Microsoft.Azure.WebJobs.Description;
     using Microsoft.Azure.WebJobs.Host.Config;
@@ -22,26 +23,29 @@ namespace QuantumCircuit.Connector
         private const uint BrandColor = 0x5C2D91;
         private static readonly Uri IconUri = new Uri("https://raw.githubusercontent.com/microsoft/qsharp/main/vscode/resources/qsharp.png");
 
-        private sealed record GateAction(string Id, string Label, string Gate, bool HasControl = false, bool HasControl2 = false, bool HasAngle = false);
+        private sealed record GateAction(string Id, string Label, string Gate, bool HasControl = false, bool HasControl2 = false, bool HasAngle = false, string IconLabel = "");
 
         private static readonly GateAction[] GateActions =
         {
-            new("addHadamard", "Add Hadamard (H)", "H"),
-            new("addX", "Add Pauli X", "X"),
-            new("addY", "Add Pauli Y", "Y"),
-            new("addZ", "Add Pauli Z", "Z"),
-            new("addS", "Add phase S", "S"),
-            new("addSAdjoint", "Add adjoint S", "S_DAG"),
-            new("addT", "Add phase T", "T"),
-            new("addTAdjoint", "Add adjoint T", "T_DAG"),
-            new("addCnot", "Add CNOT", "CNOT", HasControl: true),
-            new("addCz", "Add controlled Z", "CZ", HasControl: true),
-            new("addSwap", "Add SWAP", "SWAP", HasControl: true),
-            new("addToffoli", "Add Toffoli", "TOFFOLI", HasControl: true, HasControl2: true),
-            new("addRx", "Add rotation Rx", "RX", HasAngle: true),
-            new("addRy", "Add rotation Ry", "RY", HasAngle: true),
-            new("addRz", "Add rotation Rz", "RZ", HasAngle: true),
+            new("addHadamard", "Add Hadamard (H)", "H", IconLabel: "H"),
+            new("addX", "Add Pauli X", "X", IconLabel: "X"),
+            new("addY", "Add Pauli Y", "Y", IconLabel: "Y"),
+            new("addZ", "Add Pauli Z", "Z", IconLabel: "Z"),
+            new("addS", "Add phase S", "S", IconLabel: "S"),
+            new("addSAdjoint", "Add adjoint S", "S_DAG", IconLabel: "S*"),
+            new("addT", "Add phase T", "T", IconLabel: "T"),
+            new("addTAdjoint", "Add adjoint T", "T_DAG", IconLabel: "T*"),
+            new("addCnot", "Add CNOT", "CNOT", HasControl: true, IconLabel: "CNOT"),
+            new("addCz", "Add controlled Z", "CZ", HasControl: true, IconLabel: "CZ"),
+            new("addSwap", "Add SWAP", "SWAP", HasControl: true, IconLabel: "SWAP"),
+            new("addToffoli", "Add Toffoli", "TOFFOLI", HasControl: true, HasControl2: true, IconLabel: "CCX"),
+            new("addRx", "Add rotation Rx", "RX", HasAngle: true, IconLabel: "Rx"),
+            new("addRy", "Add rotation Ry", "RY", HasAngle: true, IconLabel: "Ry"),
+            new("addRz", "Add rotation Rz", "RZ", HasAngle: true, IconLabel: "Rz"),
         };
+
+        private static readonly Uri CircuitIconUri = CreateIconUri(
+            "<path d=\"M6 9h20M6 16h20M6 23h20\" stroke=\"#5C2D91\" stroke-width=\"2\"/><circle cx=\"11\" cy=\"9\" r=\"3\" fill=\"#5C2D91\"/><circle cx=\"21\" cy=\"16\" r=\"3\" fill=\"#5C2D91\"/>");
 
         private readonly ServiceOperationApi api;
         private readonly List<ServiceOperation> operations = new List<ServiceOperation>();
@@ -92,7 +96,7 @@ namespace QuantumCircuit.Connector
                         Description = $"Bit string (e.g. 00). Left-most character is qubit 0; maximum {QuantumCircuitExecutor.MaxQubits} qubits.",
                     }
                 },
-            }, new[] { "initialState" });
+            }, new[] { "initialState" }, CircuitIconUri);
 
             foreach (var gate in GateActions)
             {
@@ -117,7 +121,7 @@ namespace QuantumCircuit.Connector
                     inputs.Add("angle", new SwaggerSchema { Type = SwaggerSchemaType.Number, Title = "Angle (radians)", Description = "Finite rotation angle in radians." });
                     required.Add("angle");
                 }
-                this.AddOperation(gate.Id, gate.Label, inputs, required.ToArray());
+                this.AddOperation(gate.Id, gate.Label, inputs, required.ToArray(), CreateGateIconUri(gate));
             }
         }
 
@@ -240,7 +244,28 @@ namespace QuantumCircuit.Connector
             Required = new[] { "initialState", "gates" },
         };
 
-        private void AddOperation(string id, string label, OrdinalDictionary<SwaggerSchema> inputs, string[] required)
+        private static Uri CreateGateIconUri(GateAction gate)
+        {
+            var artwork = gate.Gate switch
+            {
+                "CNOT" => "<path d=\"M6 16h20\" stroke=\"#5C2D91\" stroke-width=\"2\"/><circle cx=\"10\" cy=\"16\" r=\"3\" fill=\"#5C2D91\"/><circle cx=\"23\" cy=\"16\" r=\"6\" fill=\"#F3E8FF\" stroke=\"#5C2D91\" stroke-width=\"2\"/><path d=\"M23 12v8M19 16h8\" stroke=\"#5C2D91\" stroke-width=\"2\"/>",
+                "CZ" => "<path d=\"M6 16h20\" stroke=\"#5C2D91\" stroke-width=\"2\"/><circle cx=\"10\" cy=\"16\" r=\"4\" fill=\"#5C2D91\"/><circle cx=\"23\" cy=\"16\" r=\"4\" fill=\"#5C2D91\"/>",
+                "SWAP" => "<path d=\"M7 10h18l-4-4M25 22H7l4 4M9 22l14-12M23 22 9 10\" fill=\"none\" stroke=\"#5C2D91\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
+                "TOFFOLI" => "<path d=\"M9 9v14M9 16h16\" fill=\"none\" stroke=\"#5C2D91\" stroke-width=\"2\"/><circle cx=\"9\" cy=\"9\" r=\"3\" fill=\"#5C2D91\"/><circle cx=\"9\" cy=\"23\" r=\"3\" fill=\"#5C2D91\"/><circle cx=\"24\" cy=\"16\" r=\"6\" fill=\"#F3E8FF\" stroke=\"#5C2D91\" stroke-width=\"2\"/><path d=\"M24 12v8M20 16h8\" stroke=\"#5C2D91\" stroke-width=\"2\"/>",
+                _ => $"<text x=\"16\" y=\"22\" text-anchor=\"middle\" font-family=\"Segoe UI,Arial,sans-serif\" font-size=\"{(gate.IconLabel.Length > 2 ? 11 : 18)}\" font-weight=\"700\" fill=\"#5C2D91\">{gate.IconLabel}</text>",
+            };
+
+            return CreateIconUri(artwork);
+        }
+
+        private static Uri CreateIconUri(string artwork)
+        {
+            var svg = $"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 32 32\"><rect x=\"1\" y=\"1\" width=\"30\" height=\"30\" rx=\"7\" fill=\"#F3E8FF\" stroke=\"#5C2D91\" stroke-width=\"1.5\"/>{artwork}</svg>";
+            var encodedSvg = Convert.ToBase64String(Encoding.UTF8.GetBytes(svg));
+            return new Uri($"data:image/svg+xml;base64,{encodedSvg}", UriKind.Absolute);
+        }
+
+        private void AddOperation(string id, string label, OrdinalDictionary<SwaggerSchema> inputs, string[] required, Uri iconUri)
         {
             var operation = new ServiceOperation
             {
@@ -255,7 +280,7 @@ namespace QuantumCircuit.Connector
                     Visibility = Visibility.Important,
                     OperationType = OperationType.ServiceProvider,
                     BrandColor = BrandColor,
-                    IconUri = IconUri,
+                    IconUri = iconUri,
                 },
             };
             this.operations.Add(operation);

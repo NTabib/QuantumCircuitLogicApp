@@ -1,8 +1,8 @@
 <#
 .SYNOPSIS
   Provisions the Azure infrastructure, builds the Q# library + custom connector + Logic App,
-  deploys the package to Logic Apps Standard and tests the X-gate, visual circuit,
-  and ten quantum algorithm demonstration workflows.
+  deploys the package to Logic Apps Standard and tests the X-gate, beginner gate lessons,
+  visual circuit, and ten quantum algorithm demonstration workflows.
 
 .EXAMPLE
   .\deploy.ps1 -ResourceGroup rg-quantum-circuit -Location westeurope
@@ -80,13 +80,13 @@ Invoke-Checked {
 Write-Host '==> Waiting for the workflow host to restart' -ForegroundColor Cyan
 $callbackUrl = Get-WorkflowCallbackUrl 'XGateDemoWorkflow'
 
-# Write-Host '==> Testing XGateDemoWorkflow through createCircuit -> addX -> runCircuit' -ForegroundColor Cyan
-# $xDemoBody = @{ shots = 100 } | ConvertTo-Json
-# $xDemoResult = Invoke-RestMethod -Method Post -Uri $callbackUrl -ContentType 'application/json' -Body $xDemoBody
-# $xGates = @($xDemoResult.circuit.gates)
-# if ($xDemoResult.circuit.initialState -ne '0' -or $xGates.Count -ne 1 -or $xGates[0].gate -ne 'X' -or $xGates[0].target -ne 0) {
-# 	throw 'X-gate workflow smoke test failed: expected circuit |0> -> X(0) built by the generic gate action.'
-# }
+Write-Host '==> Testing XGateDemoWorkflow through createCircuit -> addX -> runCircuit' -ForegroundColor Cyan
+$xDemoBody = @{ shots = 100 } | ConvertTo-Json
+$xDemoResult = Invoke-RestMethod -Method Post -Uri $callbackUrl -ContentType 'application/json' -Body $xDemoBody
+$xGates = @($xDemoResult.circuit.gates)
+if ($xDemoResult.circuit.initialState -ne '0' -or $xGates.Count -ne 1 -or $xGates[0].gate -ne 'X' -or $xGates[0].target -ne 0) {
+	throw 'X-gate workflow smoke test failed: expected circuit |0> -> X(0) built by the generic gate action.'
+}
 
 $xCircuitResult = $xDemoResult.circuitResult
 if ($xCircuitResult.simulator -ne 'FullState' -or $xCircuitResult.qubitCount -ne 1 `
@@ -138,6 +138,12 @@ $visualResult | ConvertTo-Json -Depth 10
 Write-Host 'Visual quantum circuit smoke test passed.' -ForegroundColor Green
 
 Test-AlgorithmWorkflows -GetCallbackUrl {
+	param($workflowName)
+	Get-WorkflowCallbackUrl $workflowName
+} -Shots 100
+
+. (Join-Path $PSScriptRoot 'Test-BeginnerGateWorkflows.ps1')
+Test-BeginnerGateWorkflows -GetCallbackUrl {
 	param($workflowName)
 	Get-WorkflowCallbackUrl $workflowName
 } -Shots 100
