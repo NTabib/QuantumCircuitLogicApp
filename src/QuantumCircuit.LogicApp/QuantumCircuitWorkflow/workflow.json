@@ -1,0 +1,104 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "triggers": {
+      "When_a_HTTP_request_is_received": {
+        "type": "Request",
+        "kind": "Http",
+        "inputs": {
+          "method": "POST",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "initialState": {
+                "type": "string",
+                "description": "Initial computational-basis bit string; left-most character is qubit 0."
+              },
+              "gates": {
+                "type": "array",
+                "description": "Ordered circuit instructions executed in one Q# simulator run.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "gate": { "type": "string" },
+                    "target": { "type": "integer" },
+                    "control": { "type": "integer" },
+                    "control2": { "type": "integer" },
+                    "angle": { "type": "number" }
+                  },
+                  "required": [ "gate", "target" ]
+                }
+              },
+              "shots": {
+                "type": "integer",
+                "description": "Number of complete circuit executions, from 1 to 1000."
+              }
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "Execute_circuit": {
+        "type": "Scope",
+        "runAfter": {},
+        "actions": {
+          "Run_circuit": {
+            "type": "ServiceProvider",
+            "runAfter": {},
+            "inputs": {
+              "parameters": {
+                "initialState": "@coalesce(triggerBody()?['initialState'], '00')",
+                "gates": "@coalesce(triggerBody()?['gates'], json('[{\"gate\":\"H\",\"target\":0},{\"gate\":\"CNOT\",\"control\":0,\"target\":1}]'))",
+                "shots": "@coalesce(triggerBody()?['shots'], 100)"
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuit",
+                "operationId": "runCircuit",
+                "serviceProviderId": "/serviceProviders/quantumCircuit"
+              }
+            }
+          }
+        }
+      },
+      "Success_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": {
+          "Execute_circuit": [ "Succeeded" ]
+        },
+        "inputs": {
+          "statusCode": 200,
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "body": {
+            "workflowRunId": "@workflow()?['run']?['name']",
+            "circuitResult": "@body('Run_circuit')"
+          }
+        }
+      },
+      "Failure_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": {
+          "Execute_circuit": [ "Failed", "TimedOut" ]
+        },
+        "inputs": {
+          "statusCode": 400,
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "body": {
+            "workflowRunId": "@workflow()?['run']?['name']",
+            "error": "The quantum circuit could not be executed.",
+            "details": "@result('Execute_circuit')"
+          }
+        }
+      }
+    },
+    "outputs": {}
+  },
+  "kind": "Stateful"
+}

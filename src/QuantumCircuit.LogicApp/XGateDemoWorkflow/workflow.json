@@ -1,0 +1,120 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "triggers": {
+      "When_a_HTTP_request_is_received": {
+        "type": "Request",
+        "kind": "Http",
+        "inputs": {
+          "method": "POST",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "shots": {
+                "type": "integer",
+                "description": "Number of complete circuit executions (1-1000)."
+              }
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "Build_and_execute_X_demo": {
+        "type": "Scope",
+        "runAfter": {},
+        "actions": {
+          "Create_circuit": {
+            "type": "ServiceProvider",
+            "runAfter": {},
+            "inputs": {
+              "parameters": {
+                "initialState": "0"
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "createCircuit",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Add_X_gate": {
+            "type": "ServiceProvider",
+            "runAfter": {
+              "Create_circuit": [ "Succeeded" ]
+            },
+            "inputs": {
+              "parameters": {
+                "circuit": "@body('Create_circuit')?['circuit']",
+                "target": 0
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addX",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Execute_circuit": {
+            "type": "ServiceProvider",
+            "runAfter": {
+              "Add_X_gate": [ "Succeeded" ]
+            },
+            "inputs": {
+              "parameters": {
+                "initialState": "@body('Add_X_gate')?['circuit']?['initialState']",
+                "gates": "@body('Add_X_gate')?['circuit']?['gates']",
+                "shots": "@coalesce(triggerBody()?['shots'], 100)"
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuit",
+                "operationId": "runCircuit",
+                "serviceProviderId": "/serviceProviders/quantumCircuit"
+              }
+            }
+          }
+        }
+      },
+      "Success_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": {
+          "Build_and_execute_X_demo": [ "Succeeded" ]
+        },
+        "inputs": {
+          "statusCode": 200,
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "body": {
+            "workflowRunId": "@workflow()?['run']?['name']",
+            "circuit": "@body('Add_X_gate')?['circuit']",
+            "circuitResult": "@body('Execute_circuit')",
+            "xGateVerified": "@equals(body('Execute_circuit')?['counts']?['1'], coalesce(triggerBody()?['shots'], 100))"
+          }
+        }
+      },
+      "Failure_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": {
+          "Build_and_execute_X_demo": [ "Failed", "TimedOut" ]
+        },
+        "inputs": {
+          "statusCode": 400,
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "body": {
+            "workflowRunId": "@workflow()?['run']?['name']",
+            "error": "The X-gate circuit could not be built or executed.",
+            "details": "@result('Build_and_execute_X_demo')"
+          }
+        }
+      }
+    },
+    "outputs": {}
+  },
+  "kind": "Stateful"
+}

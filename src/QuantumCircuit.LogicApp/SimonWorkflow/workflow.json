@@ -1,0 +1,230 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "triggers": {
+      "When_a_HTTP_request_is_received": {
+        "type": "Request",
+        "kind": "Http",
+        "inputs": {
+          "method": "POST",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "shots": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000,
+                "description": "Shots per circuit evaluation (default 100)."
+              }
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "Algorithm": {
+        "type": "Scope",
+        "runAfter": {},
+        "actions": {
+          "Create_circuit": {
+            "type": "ServiceProvider",
+            "runAfter": {},
+            "inputs": {
+              "parameters": {
+                "initialState": "000"
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "createCircuit",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "01_H_q0": {
+            "type": "ServiceProvider",
+            "runAfter": {
+              "Create_circuit": [
+                "Succeeded"
+              ]
+            },
+            "inputs": {
+              "parameters": {
+                "circuit": "@body('Create_circuit')?['circuit']",
+                "target": 0
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addHadamard",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "02_H_q1": {
+            "type": "ServiceProvider",
+            "runAfter": {
+              "01_H_q0": [
+                "Succeeded"
+              ]
+            },
+            "inputs": {
+              "parameters": {
+                "circuit": "@body('01_H_q0')?['circuit']",
+                "target": 1
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addHadamard",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "03_CNOT_q2": {
+            "type": "ServiceProvider",
+            "runAfter": {
+              "02_H_q1": [
+                "Succeeded"
+              ]
+            },
+            "inputs": {
+              "parameters": {
+                "circuit": "@body('02_H_q1')?['circuit']",
+                "target": 2,
+                "control": 0
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addCnot",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "04_CNOT_q2": {
+            "type": "ServiceProvider",
+            "runAfter": {
+              "03_CNOT_q2": [
+                "Succeeded"
+              ]
+            },
+            "inputs": {
+              "parameters": {
+                "circuit": "@body('03_CNOT_q2')?['circuit']",
+                "target": 2,
+                "control": 1
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addCnot",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "05_H_q0": {
+            "type": "ServiceProvider",
+            "runAfter": {
+              "04_CNOT_q2": [
+                "Succeeded"
+              ]
+            },
+            "inputs": {
+              "parameters": {
+                "circuit": "@body('04_CNOT_q2')?['circuit']",
+                "target": 0
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addHadamard",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "06_H_q1": {
+            "type": "ServiceProvider",
+            "runAfter": {
+              "05_H_q0": [
+                "Succeeded"
+              ]
+            },
+            "inputs": {
+              "parameters": {
+                "circuit": "@body('05_H_q0')?['circuit']",
+                "target": 1
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addHadamard",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Execute_circuit": {
+            "type": "ServiceProvider",
+            "runAfter": {
+              "06_H_q1": [
+                "Succeeded"
+              ]
+            },
+            "inputs": {
+              "parameters": {
+                "initialState": "@body('06_H_q1')?['circuit']?['initialState']",
+                "gates": "@body('06_H_q1')?['circuit']?['gates']",
+                "shots": "@coalesce(triggerBody()?['shots'], 100)"
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuit",
+                "operationId": "runCircuit",
+                "serviceProviderId": "/serviceProviders/quantumCircuit"
+              }
+            }
+          }
+        }
+      },
+      "Success_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": {
+          "Algorithm": [
+            "Succeeded"
+          ]
+        },
+        "inputs": {
+          "statusCode": 200,
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "body": {
+            "workflowRunId": "@workflow()?['run']?['name']",
+            "algorithm": "Simon",
+            "demo": "Two-bit period 11 for f(x)=x0 XOR x1. For this small instance any observed y=11 determines the nonzero period; last bit is oracle output.",
+            "circuit": "@body('06_H_q1')?['circuit']",
+            "circuitResult": "@body('Execute_circuit')",
+            "recoveredSecret": "@if(greater(add(coalesce(body('Execute_circuit')?['counts']?['110'],0),coalesce(body('Execute_circuit')?['counts']?['111'],0)),0),'11','inconclusive')",
+            "recoveryNote": "Finite shots may be inconclusive. This classical recovery rule is specialized to the two-input demonstration."
+          }
+        }
+      },
+      "Failure_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": {
+          "Algorithm": [
+            "Failed",
+            "TimedOut"
+          ]
+        },
+        "inputs": {
+          "statusCode": 400,
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "body": {
+            "error": "Simon demonstration failed.",
+            "details": "@result('Algorithm')"
+          }
+        }
+      }
+    },
+    "outputs": {}
+  },
+  "kind": "Stateful"
+}

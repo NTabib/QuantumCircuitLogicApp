@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+	Custom built-in (service provider) connector for Azure Logic Apps Standard.
+	It is loaded in-process by the Logic Apps runtime (Azure Functions host v4)
+	and wraps the Q# library (QuantumCircuit.QSharp) + the QDK full-state simulator.
+  -->
+  <PropertyGroup>
+	<TargetFramework>net8.0</TargetFramework>
+	<RootNamespace>QuantumCircuit.Connector</RootNamespace>
+	<Nullable>disable</Nullable>
+	<IsPackable>true</IsPackable>
+	<PackageId>QuantumCircuit.Connector</PackageId>
+	<Version>1.0.0</Version>
+	<Authors>QuantumCircuit</Authors>
+	<Description>Logic Apps Standard built-in connector for visual Q# circuit construction and execution.</Description>
+	<!-- Required so that the WebJobs startup attribute is discovered by the Functions host. -->
+	<CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+	<PackageReference Include="Microsoft.Azure.Workflows.WebJobs.Extension" Version="1.170.91" />
+	<PackageReference Include="Microsoft.Quantum.Simulators" Version="0.28.302812" />
+  </ItemGroup>
+
+  <ItemGroup>
+	<ProjectReference Include="..\QuantumCircuit.QSharp\QuantumCircuit.QSharp.csproj" />
+  </ItemGroup>
+
+</Project>

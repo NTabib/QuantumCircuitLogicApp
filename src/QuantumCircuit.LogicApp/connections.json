@@ -1,0 +1,23 @@
+{
+  "serviceProviderConnections": {
+    "quantumCircuitBuilder": {
+      "parameterValues": {
+        "format": "instruction-list-v1"
+      },
+      "serviceProvider": {
+        "id": "/serviceProviders/quantumCircuitBuilder"
+      },
+      "displayName": "Quantum Circuit Builder"
+    },
+    "quantumCircuit": {
+      "parameterValues": {
+        "simulator": "FullState"
+      },
+      "serviceProvider": {
+        "id": "/serviceProviders/quantumCircuit"
+      },
+      "displayName": "Quantum Circuit (Q# simulator)"
+    }
+  },
+  "managedApiConnections": {}
+}

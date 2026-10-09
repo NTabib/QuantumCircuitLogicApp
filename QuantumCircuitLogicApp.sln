@@ -1,0 +1,41 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{86C43364-E3E4-4185-B128-637254E67900}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QuantumCircuit.QSharp", "src\QuantumCircuit.QSharp\QuantumCircuit.QSharp.csproj", "{715B065B-2583-4067-A720-C12039923B10}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QuantumCircuit.Connector", "src\QuantumCircuit.Connector\QuantumCircuit.Connector.csproj", "{CD3FC3AE-FE74-4093-8C25-6B4D04138BAA}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QuantumCircuit.LogicApp", "src\QuantumCircuit.LogicApp\QuantumCircuit.LogicApp.csproj", "{0222C7C2-2FA7-482B-8A78-9891FCEF903E}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{715B065B-2583-4067-A720-C12039923B10}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{715B065B-2583-4067-A720-C12039923B10}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{715B065B-2583-4067-A720-C12039923B10}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{715B065B-2583-4067-A720-C12039923B10}.Release|Any CPU.Build.0 = Release|Any CPU
+		{CD3FC3AE-FE74-4093-8C25-6B4D04138BAA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{CD3FC3AE-FE74-4093-8C25-6B4D04138BAA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{CD3FC3AE-FE74-4093-8C25-6B4D04138BAA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{CD3FC3AE-FE74-4093-8C25-6B4D04138BAA}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0222C7C2-2FA7-482B-8A78-9891FCEF903E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0222C7C2-2FA7-482B-8A78-9891FCEF903E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0222C7C2-2FA7-482B-8A78-9891FCEF903E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0222C7C2-2FA7-482B-8A78-9891FCEF903E}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{715B065B-2583-4067-A720-C12039923B10} = {86C43364-E3E4-4185-B128-637254E67900}
+		{CD3FC3AE-FE74-4093-8C25-6B4D04138BAA} = {86C43364-E3E4-4185-B128-637254E67900}
+		{0222C7C2-2FA7-482B-8A78-9891FCEF903E} = {86C43364-E3E4-4185-B128-637254E67900}
+	EndGlobalSection
+EndGlobal

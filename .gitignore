@@ -1,0 +1,21 @@
+# .NET and Visual Studio build output
+**/bin/
+**/obj/
+.vs/
+*.user
+*.suo
+
+# Generated Logic Apps publish packages
+/artifacts/
+
+# Local Logic Apps / Azure Functions settings (may contain secrets)
+**/local.settings.json
+**/local.settings.*.json
+
+# Test and coverage output
+**/TestResults/
+**/coverage/
+
+# Logs and temporary files
+*.log
+*.tmp

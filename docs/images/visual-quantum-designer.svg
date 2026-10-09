@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="780" viewBox="0 0 1200 780" role="img" aria-labelledby="title desc">
+  <title id="title">Build a Bell circuit with visual Logic Apps steps</title>
+  <desc id="desc">A conceptual designer shows Create circuit, Hadamard, CNOT and Execute steps. The builder steps assemble instructions. The final Q# execution prepares a Bell state and measures correlated 00 and 11 outcomes.</desc>
+  <defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#0c1429"/><stop offset="1" stop-color="#17223f"/></linearGradient><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#61d9d0"/></marker></defs>
+  <style>text{font-family:Segoe UI,Arial,sans-serif;fill:#eef4ff}.title{font-size:32px;font-weight:700}.label{font-size:20px;font-weight:600}.body{font-size:17px;fill:#aebbd7}.mono{font-family:Consolas,monospace;font-size:18px}.small{font-size:14px;fill:#aebbd7}</style>
+  <rect width="1200" height="780" rx="24" fill="url(#bg)"/>
+  <text x="44" y="50" class="small" fill="#61d9d0">QUANTUM COMPUTING ON A CANVAS</text>
+  <text x="44" y="95" class="title">Visual steps. One coherent quantum execution.</text>
+  <text x="44" y="125" class="small">Conceptual designer illustration, not a screenshot of the Azure portal.</text>
+  <rect x="40" y="155" width="470" height="565" rx="18" fill="#0c1429" stroke="#304161"/>
+  <text x="65" y="188" class="small">LOGIC APPS STANDARD WORKFLOW</text>
+  <g>
+	<rect x="65" y="208" width="420" height="88" rx="12" fill="#19383e" stroke="#61d9d0"/>
+	<text x="87" y="242" class="label">Create circuit</text><text x="87" y="274" class="mono">initialState: "00"</text>
+	<path d="M275 297V324" stroke="#61d9d0" stroke-width="2" marker-end="url(#arrow)"/>
+	<rect x="65" y="330" width="420" height="88" rx="12" fill="#19383e" stroke="#61d9d0"/>
+	<text x="87" y="364" class="label">Add Hadamard (H)</text><text x="87" y="395" class="mono">target: 0 | circuit: previous output</text>
+	<path d="M275 419V446" stroke="#61d9d0" stroke-width="2" marker-end="url(#arrow)"/>
+	<rect x="65" y="452" width="420" height="88" rx="12" fill="#19383e" stroke="#61d9d0"/>
+	<text x="87" y="486" class="label">Add CNOT</text><text x="87" y="518" class="mono">control: 0 | target: 1</text>
+	<path d="M275 541V568" stroke="#61d9d0" stroke-width="2" marker-end="url(#arrow)"/>
+	<rect x="65" y="574" width="420" height="96" rx="12" fill="#342c58" stroke="#b39aff"/>
+	<text x="87" y="610" class="label">Execute complete circuit</text><text x="87" y="643" class="mono">FullState | 100 shots | measure</text>
+	<text x="65" y="699" class="small">Builder cards append JSON; they do not run gates.</text>
+  </g>
+  <rect x="545" y="155" width="615" height="565" rx="18" fill="#101c33" stroke="#304161"/>
+  <text x="575" y="192" class="small">INSIDE THE Q# EXECUTOR</text>
+  <text x="575" y="236" class="label">The same algorithm as a quantum circuit</text>
+  <text x="575" y="289" class="mono">q0 |0&gt;</text><text x="575" y="362" class="mono">q1 |0&gt;</text>
+  <path d="M660 284H1095M660 357H1095" stroke="#aebbd7" stroke-width="2"/>
+  <rect x="707" y="260" width="48" height="48" rx="6" fill="#19383e" stroke="#61d9d0"/><text x="723" y="292" class="label">H</text>
+  <path d="M860 284V357" stroke="#61d9d0" stroke-width="3"/><circle cx="860" cy="284" r="7" fill="#61d9d0"/><circle cx="860" cy="357" r="19" fill="#101c33" stroke="#61d9d0" stroke-width="3"/><path d="M845 357H875M860 342V372" stroke="#61d9d0" stroke-width="2"/>
+  <rect x="1020" y="260" width="48" height="48" rx="6" fill="#342c58" stroke="#b39aff"/><text x="1035" y="291" class="label">M</text>
+  <rect x="1020" y="333" width="48" height="48" rx="6" fill="#342c58" stroke="#b39aff"/><text x="1035" y="364" class="label">M</text>
+  <text x="575" y="426" class="mono">(|00&gt; + |11&gt;) / sqrt(2)</text>
+  <text x="575" y="453" class="body">Entanglement stays inside one Q# invocation.</text>
+  <text x="575" y="510" class="label">Illustrative measurement histogram</text>
+  <text x="575" y="555" class="mono">00</text><rect x="622" y="535" width="243" height="28" rx="5" fill="#61d9d0"/><text x="885" y="555" class="body">about 50%</text>
+  <text x="575" y="603" class="mono">11</text><rect x="622" y="583" width="243" height="28" rx="5" fill="#b39aff"/><text x="885" y="603" class="body">about 50%</text>
+  <text x="575" y="654" class="body">Only 00 or 11; finite-shot proportions vary.</text>
+  <text x="575" y="683" class="small">Classical results return to the workflow after measurement.</text>
+  <text x="44" y="752" class="small">Custom built-in connectors + Q# SDK + Azure Logic Apps Standard</text>
+</svg>

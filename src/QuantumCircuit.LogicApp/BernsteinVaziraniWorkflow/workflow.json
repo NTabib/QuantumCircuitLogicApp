@@ -1,0 +1,286 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "triggers": {
+      "When_a_HTTP_request_is_received": {
+        "type": "Request",
+        "kind": "Http",
+        "inputs": {
+          "method": "POST",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "shots": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000,
+                "description": "Shots per circuit evaluation (default 100)."
+              }
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "Algorithm": {
+        "type": "Scope",
+        "runAfter": {},
+        "actions": {
+          "Create_circuit": {
+            "type": "ServiceProvider",
+            "runAfter": {},
+            "inputs": {
+              "parameters": {
+                "initialState": "0001"
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "createCircuit",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "01_H_q0": {
+            "type": "ServiceProvider",
+            "runAfter": {
+              "Create_circuit": [
+                "Succeeded"
+              ]
+            },
+            "inputs": {
+              "parameters": {
+                "circuit": "@body('Create_circuit')?['circuit']",
+                "target": 0
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addHadamard",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "02_H_q1": {
+            "type": "ServiceProvider",
+            "runAfter": {
+              "01_H_q0": [
+                "Succeeded"
+              ]
+            },
+            "inputs": {
+              "parameters": {
+                "circuit": "@body('01_H_q0')?['circuit']",
+                "target": 1
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addHadamard",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "03_H_q2": {
+            "type": "ServiceProvider",
+            "runAfter": {
+              "02_H_q1": [
+                "Succeeded"
+              ]
+            },
+            "inputs": {
+              "parameters": {
+                "circuit": "@body('02_H_q1')?['circuit']",
+                "target": 2
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addHadamard",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "04_H_q3": {
+            "type": "ServiceProvider",
+            "runAfter": {
+              "03_H_q2": [
+                "Succeeded"
+              ]
+            },
+            "inputs": {
+              "parameters": {
+                "circuit": "@body('03_H_q2')?['circuit']",
+                "target": 3
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addHadamard",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "05_CNOT_q3": {
+            "type": "ServiceProvider",
+            "runAfter": {
+              "04_H_q3": [
+                "Succeeded"
+              ]
+            },
+            "inputs": {
+              "parameters": {
+                "circuit": "@body('04_H_q3')?['circuit']",
+                "target": 3,
+                "control": 0
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addCnot",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "06_CNOT_q3": {
+            "type": "ServiceProvider",
+            "runAfter": {
+              "05_CNOT_q3": [
+                "Succeeded"
+              ]
+            },
+            "inputs": {
+              "parameters": {
+                "circuit": "@body('05_CNOT_q3')?['circuit']",
+                "target": 3,
+                "control": 2
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addCnot",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "07_H_q0": {
+            "type": "ServiceProvider",
+            "runAfter": {
+              "06_CNOT_q3": [
+                "Succeeded"
+              ]
+            },
+            "inputs": {
+              "parameters": {
+                "circuit": "@body('06_CNOT_q3')?['circuit']",
+                "target": 0
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addHadamard",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "08_H_q1": {
+            "type": "ServiceProvider",
+            "runAfter": {
+              "07_H_q0": [
+                "Succeeded"
+              ]
+            },
+            "inputs": {
+              "parameters": {
+                "circuit": "@body('07_H_q0')?['circuit']",
+                "target": 1
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addHadamard",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "09_H_q2": {
+            "type": "ServiceProvider",
+            "runAfter": {
+              "08_H_q1": [
+                "Succeeded"
+              ]
+            },
+            "inputs": {
+              "parameters": {
+                "circuit": "@body('08_H_q1')?['circuit']",
+                "target": 2
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addHadamard",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Execute_circuit": {
+            "type": "ServiceProvider",
+            "runAfter": {
+              "09_H_q2": [
+                "Succeeded"
+              ]
+            },
+            "inputs": {
+              "parameters": {
+                "initialState": "@body('09_H_q2')?['circuit']?['initialState']",
+                "gates": "@body('09_H_q2')?['circuit']?['gates']",
+                "shots": "@coalesce(triggerBody()?['shots'], 100)"
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuit",
+                "operationId": "runCircuit",
+                "serviceProviderId": "/serviceProviders/quantumCircuit"
+              }
+            }
+          }
+        }
+      },
+      "Success_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": {
+          "Algorithm": [
+            "Succeeded"
+          ]
+        },
+        "inputs": {
+          "statusCode": 200,
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "body": {
+            "workflowRunId": "@workflow()?['run']?['name']",
+            "algorithm": "BernsteinVazirani",
+            "demo": "Three-bit secret 101 with explicit phase-kickback oracle; last bit is the measured ancilla.",
+            "circuit": "@body('09_H_q2')?['circuit']",
+            "circuitResult": "@body('Execute_circuit')",
+            "recoveredSecret": "@substring(body('Execute_circuit')?['sample'], 0, 3)"
+          }
+        }
+      },
+      "Failure_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": {
+          "Algorithm": [
+            "Failed",
+            "TimedOut"
+          ]
+        },
+        "inputs": {
+          "statusCode": 400,
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "body": {
+            "error": "BernsteinVazirani demonstration failed.",
+            "details": "@result('Algorithm')"
+          }
+        }
+      }
+    },
+    "outputs": {}
+  },
+  "kind": "Stateful"
+}

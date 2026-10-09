@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+	NuGet-based Logic Apps Standard project.
+	Custom built-in connectors can only be deployed to Azure with this project type:
+	the extension bundle is NOT used, the Logic Apps runtime comes from the
+	Microsoft.Azure.Workflows.WebJobs.Extension package and our connector is
+	compiled into the same deployment package (bin\ folder + bin\extensions.json).
+  -->
+  <PropertyGroup>
+	<TargetFramework>net8.0</TargetFramework>
+	<AzureFunctionsVersion>v4</AzureFunctionsVersion>
+	<IsPackable>false</IsPackable>
+	<!-- The QDK full-state simulator is a native x64 library. -->
+	<PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+
+  <ItemGroup>
+	<PackageReference Include="Microsoft.Azure.Workflows.WebJobs.Extension" Version="1.170.91" />
+	<PackageReference Include="Microsoft.NET.Sdk.Functions" Version="4.6.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+	<ProjectReference Include="..\QuantumCircuit.Connector\QuantumCircuit.Connector.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+	<None Update="host.json;connections.json;parameters.json">
+	  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	</None>
+	<None Update="local.settings.json">
+	  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  <CopyToPublishDirectory>Never</CopyToPublishDirectory>
+	</None>
+	<None Update="**\workflow.json">
+	  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	</None>
+  </ItemGroup>
+
+</Project>

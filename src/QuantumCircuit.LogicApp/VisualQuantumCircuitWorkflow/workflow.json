@@ -1,0 +1,121 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "triggers": {
+      "When_a_HTTP_request_is_received": {
+        "type": "Request",
+        "kind": "Http",
+        "inputs": {
+          "method": "POST",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "initialState": { "type": "string", "description": "Initial bit string, defaults to 00." },
+              "shots": { "type": "integer", "description": "Complete-circuit executions, defaults to 100." }
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "Build_and_execute_algorithm": {
+        "type": "Scope",
+        "runAfter": {},
+        "actions": {
+          "Create_circuit": {
+            "type": "ServiceProvider",
+            "runAfter": {},
+            "inputs": {
+              "parameters": {
+                "initialState": "@coalesce(triggerBody()?['initialState'], '00')"
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "createCircuit",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Hadamard_on_qubit_0": {
+            "type": "ServiceProvider",
+            "runAfter": { "Create_circuit": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": {
+                "circuit": "@body('Create_circuit')?['circuit']",
+                "target": 0
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addHadamard",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "CNOT_from_0_to_1": {
+            "type": "ServiceProvider",
+            "runAfter": { "Hadamard_on_qubit_0": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": {
+                "circuit": "@body('Hadamard_on_qubit_0')?['circuit']",
+                "control": 0,
+                "target": 1
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "addCnot",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "Execute_complete_circuit": {
+            "type": "ServiceProvider",
+            "runAfter": { "CNOT_from_0_to_1": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": {
+                "initialState": "@body('CNOT_from_0_to_1')?['circuit']?['initialState']",
+                "gates": "@body('CNOT_from_0_to_1')?['circuit']?['gates']",
+                "shots": "@coalesce(triggerBody()?['shots'], 100)"
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuit",
+                "operationId": "runCircuit",
+                "serviceProviderId": "/serviceProviders/quantumCircuit"
+              }
+            }
+          }
+        }
+      },
+      "Success_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": { "Build_and_execute_algorithm": [ "Succeeded" ] },
+        "inputs": {
+          "statusCode": 200,
+          "headers": { "Content-Type": "application/json" },
+          "body": {
+            "workflowRunId": "@workflow()?['run']?['name']",
+            "circuit": "@body('CNOT_from_0_to_1')?['circuit']",
+            "circuitResult": "@body('Execute_complete_circuit')"
+          }
+        }
+      },
+      "Failure_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": { "Build_and_execute_algorithm": [ "Failed", "TimedOut" ] },
+        "inputs": {
+          "statusCode": 400,
+          "headers": { "Content-Type": "application/json" },
+          "body": {
+            "workflowRunId": "@workflow()?['run']?['name']",
+            "error": "The visual quantum algorithm could not be built or executed.",
+            "details": "@result('Build_and_execute_algorithm')"
+          }
+        }
+      }
+    },
+    "outputs": {}
+  },
+  "kind": "Stateful"
+}

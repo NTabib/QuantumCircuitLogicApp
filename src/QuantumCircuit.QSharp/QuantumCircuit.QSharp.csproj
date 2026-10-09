@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.Quantum.Sdk/0.28.302812">
+
+  <!--
+	Q# library compiled with the Microsoft Quantum Development Kit (QDK).
+	The Q# compiler generates .NET classes (one per operation) that the
+	Logic Apps custom connector calls through the QuantumSimulator.
+  -->
+  <PropertyGroup>
+	<TargetFramework>net6.0</TargetFramework>
+	<RootNamespace>QuantumCircuit.QSharp</RootNamespace>
+	<!-- Only the Q# library is produced here, no executable entry point. -->
+	<OutputType>Library</OutputType>
+  </PropertyGroup>
+
+</Project>

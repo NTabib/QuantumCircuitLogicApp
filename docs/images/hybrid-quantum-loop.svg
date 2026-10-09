@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="560" viewBox="0 0 1200 560" role="img" aria-labelledby="title desc">
+  <title id="title">Classical parameter sweeps around coherent quantum circuit execution</title>
+  <desc id="desc">VQE and QAOA workflows iterate sequentially over three parameter candidates, build a fresh circuit for each candidate, execute and measure it, compute a classical objective from counts and keep the best result. VQE minimizes Z energy and QAOA maximizes the two-vertex cut probability.</desc>
+  <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#61d9d0"/></marker></defs>
+  <style>text{font-family:Segoe UI,Arial,sans-serif;fill:#eef4ff}.title{font-size:30px;font-weight:700}.label{font-size:21px;font-weight:600}.body{font-size:16px;fill:#aebbd7}.small{font-size:14px;fill:#aebbd7}.mono{font-family:Consolas,monospace;font-size:16px}</style>
+  <rect width="1200" height="560" rx="24" fill="#0e172c"/>
+  <text x="42" y="55" class="title">Hybrid algorithms: classical control around quantum execution</text>
+  <text x="42" y="88" class="body">The implementation uses small sequential grid searches, not a general numerical optimizer.</text>
+  <rect x="42" y="136" width="245" height="146" rx="15" fill="#19383e" stroke="#61d9d0"/>
+  <text x="64" y="174" class="label">Choose parameters</text><text x="64" y="210" class="body">Foreach candidate</text><text x="64" y="240" class="small">theta or (gamma, beta)</text><text x="64" y="263" class="small">Sequential iterations</text>
+  <path d="M289 209H320" stroke="#61d9d0" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="332" y="136" width="245" height="146" rx="15" fill="#19383e" stroke="#61d9d0"/>
+  <text x="354" y="174" class="label">Build circuit</text><text x="354" y="210" class="body">Create + visual gates</text><text x="354" y="240" class="small">Angles from current candidate</text><text x="354" y="263" class="small">Fresh descriptor each iteration</text>
+  <path d="M579 209H610" stroke="#61d9d0" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="622" y="136" width="245" height="146" rx="15" fill="#342c58" stroke="#b39aff"/>
+  <text x="644" y="174" class="label">Execute Q#</text><text x="644" y="210" class="body">Full circuit per shot</text><text x="644" y="240" class="small">Measurement at the end</text><text x="644" y="263" class="small">Counts return to Logic Apps</text>
+  <path d="M869 209H900" stroke="#61d9d0" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="912" y="136" width="245" height="146" rx="15" fill="#19383e" stroke="#61d9d0"/>
+  <text x="933" y="174" class="label">Score and retain</text><text x="933" y="210" class="body">Compose + condition</text><text x="933" y="240" class="small">Keep best parameters/counts</text><text x="933" y="263" class="small">Record every evaluation</text>
+  <path d="M1034 285V326H164V285" fill="none" stroke="#61d9d0" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="425" y="309" width="348" height="36" rx="7" fill="#0e172c"/><text x="454" y="333" class="body">Next candidate; no live qubit carried over</text>
+  <rect x="42" y="373" width="542" height="133" rx="15" fill="#16253f" stroke="#304161"/>
+  <text x="64" y="409" class="label">VQE: one qubit, Hamiltonian Z</text><text x="64" y="441" class="mono">Energy = (count(0) - count(1)) / shots</text><text x="64" y="476" class="body">Minimize energy; grid includes ground energy -1.</text>
+  <rect x="614" y="373" width="544" height="133" rx="15" fill="#16253f" stroke="#304161"/>
+  <text x="636" y="409" class="label">QAOA: two-vertex MaxCut</text><text x="636" y="441" class="mono">Cut = (count(01) + count(10)) / shots</text><text x="636" y="476" class="body">Maximize cut; grid includes cut probability 1.</text>
+  <text x="42" y="541" class="small">All scores are derived from finite-shot measurements. A retry can change a score or break a tie differently.</text>
+</svg>
