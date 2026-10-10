@@ -107,21 +107,23 @@
 
   <section id="algorithms">
     <h2>5. Algorithm demonstrations on the canvas</h2>
-    <p>The solution includes ten original algorithm workflows built from explicit visual gate actions, plus a teleportation workflow demonstrating mid-circuit measurement and classical feed-forward. These are intentionally <strong>small fixed instances</strong>, not turnkey algorithms for arbitrary inputs, oracles or problem sizes. Their HTTP triggers accept an optional <code>shots</code> value, defaulting to 100.</p>
+    <p>The solution includes ten original algorithm workflows built from explicit visual gate actions, plus teleportation with mid-circuit feed-forward and a fixed factoring-15 Shor circuit defined in a Run circuit action. These are intentionally <strong>small fixed instances</strong>, not turnkey algorithms for arbitrary inputs, oracles or problem sizes. Their HTTP triggers accept an optional <code>shots</code> value, defaulting to 100.</p>
     <div class="table-wrap"><table><thead><tr><th>Workflow</th><th>Implemented example</th></tr></thead><tbody>
       <tr><td><code>TeleportationWorkflow</code></td><td>Teleports <code>|+&gt;</code> using Bell-basis measurement, reset and X/Z corrections; an X-basis check confirms every shot.</td></tr>
       <tr><td><code>DeutschJozsaWorkflow</code></td><td>A two-input balanced parity oracle; input measurements are 11 and the result identifies a balanced function.</td></tr>
       <tr><td><code>BernsteinVaziraniWorkflow</code></td><td>A three-bit secret 101 encoded through phase kickback. Final input bits recover 101; the measured ancilla can vary.</td></tr>
       <tr><td><code>GroverWorkflow</code></td><td>A two-qubit search with marked state 11 and one oracle/diffusion iteration. Final measurement finds 11.</td></tr>
+      <tr><td><code>GroverThreeQubitWorkflow</code></td><td>Three-qubit visual search from 000, marking 111 with H-Toffoli-H and applying one diffusion iteration. Ideal marked-state probability is 78.125%, rather than 100% for the two-qubit example.</td></tr>
       <tr><td><code>QuantumFourierTransformWorkflow</code></td><td>QFT on 01 plus a separate, freshly prepared QFT/inverse-QFT round trip. Forward Z outcomes are uniform in expectation; the round trip recovers 01.</td></tr>
       <tr><td><code>QuantumPhaseEstimationWorkflow</code></td><td>Two counting qubits estimate phase 1/4 of S on eigenstate <code>|1&gt;</code>. The counting register returns 01.</td></tr>
+      <tr><td><code>Shor15Workflow</code></td><td>Fixed factoring example for 15 with base 2: controlled modular multiplication and inverse QFT recover order 4 from informative phases, then yield factors 3 and 5; uninformative samples report inconclusive.</td></tr>
       <tr><td><code>SimonWorkflow</code></td><td>The two-bit period 11 of the parity oracle. Nonzero measured equation 11 recovers the period for this instance; an uninformative finite sample reports inconclusive.</td></tr>
       <tr><td><code>SuperdenseCodingWorkflow</code></td><td>A Bell pair, fixed encoded message 11, and a decoding circuit that recovers 11.</td></tr>
       <tr><td><code>GhzWorkflow</code></td><td>Three-qubit GHZ preparation. Final measurements contain only 000 or 111.</td></tr>
       <tr><td><code>VqeWorkflow</code></td><td>A single-qubit Hamiltonian Z with an Ry ansatz and a three-candidate classical parameter sweep. The grid includes ground energy -1.</td></tr>
       <tr><td><code>QaoaWorkflow</code></td><td>Depth-one QAOA for two-vertex MaxCut with three candidate parameter pairs. The grid includes cut probability 1.</td></tr>
       </tbody></table></div>
-    <p>Controlled phases in QFT and phase estimation are decomposed into supported Rz and CNOT gates. Simon's classical recovery is specialized to its two-input example; it is not a general solver for systems over GF(2). GHZ is a state-preparation demonstration rather than a computational algorithm, but it provides a clear visual example of multi-qubit entanglement.</p>
+    <p>Controlled phases in QFT and phase estimation are decomposed into supported Rz and CNOT gates. Unlike the deterministic two-qubit Grover example, one three-qubit iteration finds 111 with probability 25/32; all other outcomes remain possible. Simon's classical recovery is specialized to its two-input example; it is not a general solver for systems over GF(2). GHZ is a state-preparation demonstration rather than a computational algorithm, but it provides a clear visual example of multi-qubit entanglement.</p>
   </section>
 
   <section id="hybrid">
@@ -140,7 +142,7 @@
     <pre><code># Run from the solution root after selecting your Azure subscription.
 az login
 .\deploy\deploy.ps1 -ResourceGroup rg-quantum-circuit -Location westeurope</code></pre>
-    <p>The deployment script first compares the circuit executor with independent native Q# reference programs, then provisions infrastructure, publishes and zip-deploys the app. Cloud smoke tests exercise the X-gate path, six beginner lessons, reusable operations, measurement/reset/conditional feed-forward, teleportation, the visual Bell workflow and ten original algorithms.</p>
+    <p>The deployment script first compares the circuit executor with independent native Q# reference programs and checks modular multiplication for the Shor 15 example, then provisions infrastructure, publishes and zip-deploys the app. Cloud smoke tests exercise the X-gate path, six beginner lessons, reusable operations, measurement/reset/conditional feed-forward, teleportation, the visual Bell workflow, ten original algorithms, three-qubit Grover at 1,000 shots and Shor 15.</p>
     <p>The X demo test checks that the workflow builds an X instruction with the shared builder and that every shot from <code>|0&gt;</code> measures <code>1</code>. Bell and algorithm checks do not insist on an exact 50/50 split in probabilistic experiments. The generic circuit execution path uses the Q# full-state simulator.</p>
     <p>For local development, the same application can run with Azure Functions Core Tools and Azurite. Keep callback URLs secret because they contain SAS signatures, and exclude local settings and build artifacts from source control. Provisioned cloud resources incur Azure charges; this article does not imply that resources have already been deployed.</p>
   </section>

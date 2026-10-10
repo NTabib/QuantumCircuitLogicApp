@@ -1,0 +1,257 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "triggers": {
+      "When_a_HTTP_request_is_received": {
+        "type": "Request",
+        "kind": "Http",
+        "inputs": {
+          "method": "POST",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "shots": { "type": "integer", "minimum": 1, "maximum": 1000, "description": "Shots per circuit evaluation (default 100)." }
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "Algorithm": {
+        "type": "Scope",
+        "runAfter": {},
+        "actions": {
+          "Create_circuit": {
+            "type": "ServiceProvider",
+            "runAfter": {},
+            "inputs": {
+              "parameters": { "initialState": "000" },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuitBuilder",
+                "operationId": "createCircuit",
+                "serviceProviderId": "/serviceProviders/quantumCircuitBuilder"
+              }
+            }
+          },
+          "01_Prepare_H_q0": {
+            "type": "ServiceProvider",
+            "runAfter": { "Create_circuit": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('Create_circuit')?['circuit']", "target": 0 },
+              "serviceProviderConfiguration": { "connectionName": "quantumCircuitBuilder", "operationId": "addHadamard", "serviceProviderId": "/serviceProviders/quantumCircuitBuilder" }
+            }
+          },
+          "02_Prepare_H_q1": {
+            "type": "ServiceProvider",
+            "runAfter": { "01_Prepare_H_q0": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('01_Prepare_H_q0')?['circuit']", "target": 1 },
+              "serviceProviderConfiguration": { "connectionName": "quantumCircuitBuilder", "operationId": "addHadamard", "serviceProviderId": "/serviceProviders/quantumCircuitBuilder" }
+            }
+          },
+          "03_Prepare_H_q2": {
+            "type": "ServiceProvider",
+            "runAfter": { "02_Prepare_H_q1": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('02_Prepare_H_q1')?['circuit']", "target": 2 },
+              "serviceProviderConfiguration": { "connectionName": "quantumCircuitBuilder", "operationId": "addHadamard", "serviceProviderId": "/serviceProviders/quantumCircuitBuilder" }
+            }
+          },
+          "04_Oracle_H_q2": {
+            "type": "ServiceProvider",
+            "runAfter": { "03_Prepare_H_q2": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('03_Prepare_H_q2')?['circuit']", "target": 2 },
+              "serviceProviderConfiguration": { "connectionName": "quantumCircuitBuilder", "operationId": "addHadamard", "serviceProviderId": "/serviceProviders/quantumCircuitBuilder" }
+            }
+          },
+          "05_Oracle_Toffoli": {
+            "type": "ServiceProvider",
+            "runAfter": { "04_Oracle_H_q2": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('04_Oracle_H_q2')?['circuit']", "control": 0, "control2": 1, "target": 2 },
+              "serviceProviderConfiguration": { "connectionName": "quantumCircuitBuilder", "operationId": "addToffoli", "serviceProviderId": "/serviceProviders/quantumCircuitBuilder" }
+            }
+          },
+          "06_Oracle_H_q2": {
+            "type": "ServiceProvider",
+            "runAfter": { "05_Oracle_Toffoli": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('05_Oracle_Toffoli')?['circuit']", "target": 2 },
+              "serviceProviderConfiguration": { "connectionName": "quantumCircuitBuilder", "operationId": "addHadamard", "serviceProviderId": "/serviceProviders/quantumCircuitBuilder" }
+            }
+          },
+          "07_Diffusion_H_q0": {
+            "type": "ServiceProvider",
+            "runAfter": { "06_Oracle_H_q2": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('06_Oracle_H_q2')?['circuit']", "target": 0 },
+              "serviceProviderConfiguration": { "connectionName": "quantumCircuitBuilder", "operationId": "addHadamard", "serviceProviderId": "/serviceProviders/quantumCircuitBuilder" }
+            }
+          },
+          "08_Diffusion_H_q1": {
+            "type": "ServiceProvider",
+            "runAfter": { "07_Diffusion_H_q0": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('07_Diffusion_H_q0')?['circuit']", "target": 1 },
+              "serviceProviderConfiguration": { "connectionName": "quantumCircuitBuilder", "operationId": "addHadamard", "serviceProviderId": "/serviceProviders/quantumCircuitBuilder" }
+            }
+          },
+          "09_Diffusion_H_q2": {
+            "type": "ServiceProvider",
+            "runAfter": { "08_Diffusion_H_q1": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('08_Diffusion_H_q1')?['circuit']", "target": 2 },
+              "serviceProviderConfiguration": { "connectionName": "quantumCircuitBuilder", "operationId": "addHadamard", "serviceProviderId": "/serviceProviders/quantumCircuitBuilder" }
+            }
+          },
+          "10_Diffusion_X_q0": {
+            "type": "ServiceProvider",
+            "runAfter": { "09_Diffusion_H_q2": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('09_Diffusion_H_q2')?['circuit']", "target": 0 },
+              "serviceProviderConfiguration": { "connectionName": "quantumCircuitBuilder", "operationId": "addX", "serviceProviderId": "/serviceProviders/quantumCircuitBuilder" }
+            }
+          },
+          "11_Diffusion_X_q1": {
+            "type": "ServiceProvider",
+            "runAfter": { "10_Diffusion_X_q0": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('10_Diffusion_X_q0')?['circuit']", "target": 1 },
+              "serviceProviderConfiguration": { "connectionName": "quantumCircuitBuilder", "operationId": "addX", "serviceProviderId": "/serviceProviders/quantumCircuitBuilder" }
+            }
+          },
+          "12_Diffusion_X_q2": {
+            "type": "ServiceProvider",
+            "runAfter": { "11_Diffusion_X_q1": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('11_Diffusion_X_q1')?['circuit']", "target": 2 },
+              "serviceProviderConfiguration": { "connectionName": "quantumCircuitBuilder", "operationId": "addX", "serviceProviderId": "/serviceProviders/quantumCircuitBuilder" }
+            }
+          },
+          "13_Diffusion_H_q2": {
+            "type": "ServiceProvider",
+            "runAfter": { "12_Diffusion_X_q2": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('12_Diffusion_X_q2')?['circuit']", "target": 2 },
+              "serviceProviderConfiguration": { "connectionName": "quantumCircuitBuilder", "operationId": "addHadamard", "serviceProviderId": "/serviceProviders/quantumCircuitBuilder" }
+            }
+          },
+          "14_Diffusion_Toffoli": {
+            "type": "ServiceProvider",
+            "runAfter": { "13_Diffusion_H_q2": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('13_Diffusion_H_q2')?['circuit']", "control": 0, "control2": 1, "target": 2 },
+              "serviceProviderConfiguration": { "connectionName": "quantumCircuitBuilder", "operationId": "addToffoli", "serviceProviderId": "/serviceProviders/quantumCircuitBuilder" }
+            }
+          },
+          "15_Diffusion_H_q2": {
+            "type": "ServiceProvider",
+            "runAfter": { "14_Diffusion_Toffoli": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('14_Diffusion_Toffoli')?['circuit']", "target": 2 },
+              "serviceProviderConfiguration": { "connectionName": "quantumCircuitBuilder", "operationId": "addHadamard", "serviceProviderId": "/serviceProviders/quantumCircuitBuilder" }
+            }
+          },
+          "16_Diffusion_X_q0": {
+            "type": "ServiceProvider",
+            "runAfter": { "15_Diffusion_H_q2": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('15_Diffusion_H_q2')?['circuit']", "target": 0 },
+              "serviceProviderConfiguration": { "connectionName": "quantumCircuitBuilder", "operationId": "addX", "serviceProviderId": "/serviceProviders/quantumCircuitBuilder" }
+            }
+          },
+          "17_Diffusion_X_q1": {
+            "type": "ServiceProvider",
+            "runAfter": { "16_Diffusion_X_q0": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('16_Diffusion_X_q0')?['circuit']", "target": 1 },
+              "serviceProviderConfiguration": { "connectionName": "quantumCircuitBuilder", "operationId": "addX", "serviceProviderId": "/serviceProviders/quantumCircuitBuilder" }
+            }
+          },
+          "18_Diffusion_X_q2": {
+            "type": "ServiceProvider",
+            "runAfter": { "17_Diffusion_X_q1": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('17_Diffusion_X_q1')?['circuit']", "target": 2 },
+              "serviceProviderConfiguration": { "connectionName": "quantumCircuitBuilder", "operationId": "addX", "serviceProviderId": "/serviceProviders/quantumCircuitBuilder" }
+            }
+          },
+          "19_Diffusion_H_q0": {
+            "type": "ServiceProvider",
+            "runAfter": { "18_Diffusion_X_q2": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('18_Diffusion_X_q2')?['circuit']", "target": 0 },
+              "serviceProviderConfiguration": { "connectionName": "quantumCircuitBuilder", "operationId": "addHadamard", "serviceProviderId": "/serviceProviders/quantumCircuitBuilder" }
+            }
+          },
+          "20_Diffusion_H_q1": {
+            "type": "ServiceProvider",
+            "runAfter": { "19_Diffusion_H_q0": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('19_Diffusion_H_q0')?['circuit']", "target": 1 },
+              "serviceProviderConfiguration": { "connectionName": "quantumCircuitBuilder", "operationId": "addHadamard", "serviceProviderId": "/serviceProviders/quantumCircuitBuilder" }
+            }
+          },
+          "21_Diffusion_H_q2": {
+            "type": "ServiceProvider",
+            "runAfter": { "20_Diffusion_H_q1": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": { "circuit": "@body('20_Diffusion_H_q1')?['circuit']", "target": 2 },
+              "serviceProviderConfiguration": { "connectionName": "quantumCircuitBuilder", "operationId": "addHadamard", "serviceProviderId": "/serviceProviders/quantumCircuitBuilder" }
+            }
+          },
+          "Execute_circuit": {
+            "type": "ServiceProvider",
+            "runAfter": { "21_Diffusion_H_q2": [ "Succeeded" ] },
+            "inputs": {
+              "parameters": {
+                "initialState": "@body('21_Diffusion_H_q2')?['circuit']?['initialState']",
+                "gates": "@body('21_Diffusion_H_q2')?['circuit']?['gates']",
+                "shots": "@coalesce(triggerBody()?['shots'], 100)"
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuit",
+                "operationId": "runCircuit",
+                "serviceProviderId": "/serviceProviders/quantumCircuit"
+              }
+            }
+          }
+        }
+      },
+      "Success_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": { "Algorithm": [ "Succeeded" ] },
+        "inputs": {
+          "statusCode": 200,
+          "headers": { "Content-Type": "application/json" },
+          "body": {
+            "workflowRunId": "@workflow()?['run']?['name']",
+            "algorithm": "GroverThreeQubit",
+            "demo": "Three-qubit search for marked state 111; one oracle and diffusion iteration.",
+            "circuit": "@body('21_Diffusion_H_q2')?['circuit']",
+            "circuitResult": "@body('Execute_circuit')",
+            "markedState": "111"
+          }
+        }
+      },
+      "Failure_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": { "Algorithm": [ "Failed", "TimedOut" ] },
+        "inputs": {
+          "statusCode": 400,
+          "headers": { "Content-Type": "application/json" },
+          "body": {
+            "error": "Three-qubit Grover demonstration failed.",
+            "details": "@result('Algorithm')"
+          }
+        }
+      }
+    },
+    "outputs": {}
+  },
+  "kind": "Stateful"
+}

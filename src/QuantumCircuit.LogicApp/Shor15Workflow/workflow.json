@@ -1,0 +1,116 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "triggers": {
+      "When_a_HTTP_request_is_received": {
+        "type": "Request",
+        "kind": "Http",
+        "inputs": {
+          "method": "POST",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "shots": { "type": "integer", "minimum": 1, "maximum": 1000, "description": "Order-finding shots (default 100)." }
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "Order_finding": {
+        "type": "Scope",
+        "runAfter": {},
+        "actions": {
+          "Execute_circuit": {
+            "type": "ServiceProvider",
+            "runAfter": {},
+            "inputs": {
+              "parameters": {
+                "initialState": "000001",
+                "shots": "@coalesce(triggerBody()?['shots'], 100)",
+                "gates": [
+                  { "gate": "H", "target": 0 },
+                  { "gate": "H", "target": 1 },
+                  { "gate": "CNOT", "control": 2, "target": 4 },
+                  { "gate": "TOFFOLI", "control": 0, "control2": 4, "target": 2 },
+                  { "gate": "CNOT", "control": 2, "target": 4 },
+                  { "gate": "CNOT", "control": 3, "target": 5 },
+                  { "gate": "TOFFOLI", "control": 0, "control2": 5, "target": 3 },
+                  { "gate": "CNOT", "control": 3, "target": 5 },
+                  { "gate": "CNOT", "control": 2, "target": 3 },
+                  { "gate": "TOFFOLI", "control": 1, "control2": 3, "target": 2 },
+                  { "gate": "CNOT", "control": 2, "target": 3 },
+                  { "gate": "CNOT", "control": 3, "target": 4 },
+                  { "gate": "TOFFOLI", "control": 1, "control2": 4, "target": 3 },
+                  { "gate": "CNOT", "control": 3, "target": 4 },
+                  { "gate": "CNOT", "control": 4, "target": 5 },
+                  { "gate": "TOFFOLI", "control": 1, "control2": 5, "target": 4 },
+                  { "gate": "CNOT", "control": 4, "target": 5 },
+                  { "gate": "SWAP", "control": 0, "target": 1 },
+                  { "gate": "H", "target": 1 },
+                  { "gate": "RZ", "target": 1, "angle": -0.7853981633974483 },
+                  { "gate": "RZ", "target": 0, "angle": -0.7853981633974483 },
+                  { "gate": "CNOT", "control": 1, "target": 0 },
+                  { "gate": "RZ", "target": 0, "angle": 0.7853981633974483 },
+                  { "gate": "CNOT", "control": 1, "target": 0 },
+                  { "gate": "H", "target": 0 }
+                ]
+              },
+              "serviceProviderConfiguration": {
+                "connectionName": "quantumCircuit",
+                "operationId": "runCircuit",
+                "serviceProviderId": "/serviceProviders/quantumCircuit"
+              }
+            }
+          },
+          "Informative_measurements": {
+            "type": "Query",
+            "runAfter": { "Execute_circuit": [ "Succeeded" ] },
+            "inputs": {
+              "from": "@body('Execute_circuit')?['measurements']",
+              "where": "@equals(item()[1], true)"
+            }
+          }
+        }
+      },
+      "Success_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": { "Order_finding": [ "Succeeded" ] },
+        "inputs": {
+          "statusCode": 200,
+          "headers": { "Content-Type": "application/json" },
+          "body": {
+            "workflowRunId": "@workflow()?['run']?['name']",
+            "algorithm": "Shor15",
+            "demo": "Shor order finding for N=15 and a=2; counting qubits 0-1, modular work register 2-5.",
+            "modulus": 15,
+            "base": 2,
+            "circuitResult": "@body('Execute_circuit')",
+            "informativeShots": "@length(body('Informative_measurements'))",
+            "observedPhaseBits": "@if(greater(length(body('Informative_measurements')),0),if(equals(first(first(body('Informative_measurements'))),true),'11','01'),'none')",
+            "order": "@if(greater(length(body('Informative_measurements')),0),4,0)",
+            "status": "@if(greater(length(body('Informative_measurements')),0),'factored','inconclusive')",
+            "factors": "@if(greater(length(body('Informative_measurements')),0),json('[3,5]'),json('[]'))"
+          }
+        }
+      },
+      "Failure_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": { "Order_finding": [ "Failed", "TimedOut" ] },
+        "inputs": {
+          "statusCode": 400,
+          "headers": { "Content-Type": "application/json" },
+          "body": {
+            "error": "Shor factoring-15 demonstration failed.",
+            "details": "@result('Order_finding')"
+          }
+        }
+      }
+    },
+    "outputs": {}
+  },
+  "kind": "Stateful"
+}

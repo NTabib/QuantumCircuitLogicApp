@@ -2,7 +2,7 @@
 .SYNOPSIS
   Provisions the Azure infrastructure, builds the Q# library + custom connector + Logic App,
   deploys the package to Logic Apps Standard and tests teleportation, measurement/reset/branching,
-  the X-gate, beginner lessons, reusable typed operations, visual circuits, and algorithms.
+  Shor 15, the X-gate, beginner lessons, reusable typed operations, visual circuits, and algorithms.
 
 .EXAMPLE
   .\deploy.ps1 -ResourceGroup rg-quantum-circuit -Location westeurope
@@ -145,6 +145,10 @@ Test-AlgorithmWorkflows -GetCallbackUrl {
 	param($workflowName)
 	Get-WorkflowCallbackUrl $workflowName
 } -Shots 100
+Test-AlgorithmWorkflows -GetCallbackUrl {
+	param($workflowName)
+	Get-WorkflowCallbackUrl $workflowName
+} -OnlyWorkflow 'GroverThreeQubitWorkflow' -Shots 1000
 
 . (Join-Path $PSScriptRoot 'Test-BeginnerGateWorkflows.ps1')
 Test-BeginnerGateWorkflows -GetCallbackUrl {
@@ -169,6 +173,12 @@ Test-TeleportationWorkflow -GetCallbackUrl {
 	param($workflowName)
 	Get-WorkflowCallbackUrl $workflowName
 } -Shots 200
+
+. (Join-Path $PSScriptRoot 'Test-Shor15Workflow.ps1')
+Test-Shor15Workflow -GetCallbackUrl {
+	param($workflowName)
+	Get-WorkflowCallbackUrl $workflowName
+} -Shots 100
 Write-Host ''
 Write-Host "XGateDemoWorkflow URL (keep it secret, it contains a SAS key):" -ForegroundColor Yellow
 Write-Host $callbackUrl

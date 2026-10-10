@@ -81,6 +81,38 @@ AssertRejected(new JArray(JObject.Parse("{ 'gate':'MEASURE', 'target':0, 'measur
 AssertRejected(new JArray(JObject.Parse("{ 'gate':'MEASURE', 'target':0, 'measurement':'m' }"), JObject.Parse("{ 'gate':'IF', 'measurement':'m', 'equals':true, 'then':[{'gate':'IF','measurement':'m','equals':true,'then':[{'gate':'X','target':0}]}] }")), "nested conditional");
 Console.WriteLine($"Matched {shots} circuit shots against native Q# references for measurement, reset, and feed-forward; invalid control-flow cases rejected.");
 
+var workflowPath = System.IO.Path.GetFullPath(System.IO.Path.Combine(AppContext.BaseDirectory,
+    "..", "..", "..", "..", "..", "src", "QuantumCircuit.LogicApp", "Shor15Workflow", "workflow.json"));
+var workflow = JObject.Parse(System.IO.File.ReadAllText(workflowPath));
+var shorGates = (JArray)workflow["definition"]!["actions"]!["Order_finding"]!["actions"]!["Execute_circuit"]!["inputs"]!["parameters"]!["gates"]!;
+foreach (var (offset, gateCount, controlBits, multiplier) in new[] { (2, 6, "10", 4), (8, 9, "01", 2) })
+{
+    var controlledMultiply = new JArray(shorGates.Skip(offset).Take(gateCount).Select(gate => gate.DeepClone()));
+    for (var value = 0; value < 16; value++)
+    {
+        var input = controlBits + Convert.ToString(value, 2).PadLeft(4, '0');
+        var output = await QuantumCircuitExecutor.RunAsync(input, controlledMultiply, 1);
+        var expectedValue = value == 15 ? 15 : (value * multiplier) % 15;
+        var expectedOutput = controlBits + Convert.ToString(expectedValue, 2).PadLeft(4, '0');
+        if (output.Sample != expectedOutput)
+        {
+            throw new InvalidOperationException($"Controlled modular multiplication of {value} by {multiplier} yielded {output.Sample}, expected {expectedOutput}.");
+        }
+    }
+}
+
+var shor = await QuantumCircuitExecutor.RunAsync("000001", shorGates, 80);
+var orbit = new[] { "0001", "0010", "0100", "1000" };
+var phases = new[] { "00", "01", "10", "11" };
+if (shor.GateCount != 25 || shor.QubitCount != 6 || shor.Measurements.Count != 80
+    || shor.Counts.Keys.Any(key => key.Length != 6 || !phases.Contains(key.Substring(0, 2))
+        || !orbit.Contains(key.Substring(2)))
+    || phases.Any(phase => !shor.Counts.Keys.Any(key => key.StartsWith(phase, StringComparison.Ordinal))))
+{
+    throw new InvalidOperationException($"Shor's factoring-15 circuit produced an invalid phase or work register: {string.Join(',', shor.Counts.Select(entry => $"{entry.Key}:{entry.Value}"))}.");
+}
+Console.WriteLine("Shor 15 modular multiplication passed all 16 inputs for both controlled powers; all four phases observed.");
+
 static void AssertRejected(JArray instructions, string scenario)
 {
     try

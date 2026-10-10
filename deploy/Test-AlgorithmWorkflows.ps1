@@ -3,7 +3,8 @@ function Test-AlgorithmWorkflows {
 	[CmdletBinding()]
 	param(
 		[Parameter(Mandatory = $true)] [scriptblock] $GetCallbackUrl,
-		[ValidateRange(1, 1000)] [int] $Shots = 100
+		[ValidateRange(1, 1000)] [int] $Shots = 100,
+		[string] $OnlyWorkflow
 	)
 
 	function Assert-Histogram($Result, [int] $Qubits, [int] $Gates, [string[]] $Allowed, [string] $Label) {
@@ -33,6 +34,7 @@ function Test-AlgorithmWorkflows {
 		@{ Name = 'DeutschJozsa'; Qubits = 3; Gates = 7; Outcomes = @('110', '111') },
 		@{ Name = 'BernsteinVazirani'; Qubits = 4; Gates = 9; Outcomes = @('1010', '1011') },
 		@{ Name = 'Grover'; Qubits = 2; Gates = 12; Outcomes = @('11') },
+		@{ Name = 'GroverThreeQubit'; Qubits = 3; Gates = 21; Outcomes = @('000', '001', '010', '011', '100', '101', '110', '111') },
 		@{ Name = 'QuantumFourierTransform'; Qubits = 2; Gates = 8; Outcomes = @('00', '01', '10', '11') },
 		@{ Name = 'QuantumPhaseEstimation'; Qubits = 3; Gates = 16; Outcomes = @('011') },
 		@{ Name = 'Simon'; Qubits = 3; Gates = 6; Outcomes = @('000', '001', '110', '111') },
@@ -41,6 +43,10 @@ function Test-AlgorithmWorkflows {
 		@{ Name = 'Vqe' },
 		@{ Name = 'Qaoa' }
 	)
+	if ($OnlyWorkflow) {
+		$cases = @($cases | Where-Object { "$($_.Name)Workflow" -eq $OnlyWorkflow })
+		if ($cases.Count -ne 1) { throw "Unknown algorithm workflow '$OnlyWorkflow'." }
+	}
 
 	foreach ($case in $cases) {
 		$workflowName = "$($case.Name)Workflow"
@@ -60,6 +66,25 @@ function Test-AlgorithmWorkflows {
 				}
 				'BernsteinVazirani' {
 					if ($response.recoveredSecret -ne '101') { throw 'Bernstein-Vazirani failed to recover 101.' }
+				}
+				'GroverThreeQubit' {
+					if ($response.circuit.initialState -ne '000' -or $response.markedState -ne '111') {
+						throw 'Three-qubit Grover must start at 000 and mark 111.'
+					}
+					$gateNames = @($response.circuit.gates | ForEach-Object { $_.gate })
+					$expected = @('H','H','H','H','TOFFOLI','H','H','H','H','X','X','X','H','TOFFOLI','H','X','X','X','H','H','H')
+					if (($gateNames -join ',') -ne ($expected -join ',') `
+						-or $response.circuit.gates[4].control -ne 0 -or $response.circuit.gates[4].control2 -ne 1 -or $response.circuit.gates[4].target -ne 2 `
+						-or $response.circuit.gates[13].control -ne 0 -or $response.circuit.gates[13].control2 -ne 1 -or $response.circuit.gates[13].target -ne 2) {
+						throw 'Three-qubit Grover oracle or diffuser is incomplete.'
+					}
+					$markedProbability = (Count-Outcome $response.circuitResult.counts '111') / [double]$Shots
+					if ($Shots -ge 100 -and $markedProbability -lt 0.55) {
+						throw 'Three-qubit Grover did not amplify 111 above the uniform baseline.'
+					}
+					if ($Shots -ge 500 -and ($markedProbability -lt 0.70 -or $markedProbability -gt 0.86)) {
+						throw 'Three-qubit Grover deviated from the ideal 25/32 marked-state probability.'
+					}
 				}
 				'QuantumFourierTransform' {
 					Assert-Histogram $response.verificationResult 2 16 @('01') "$workflowName round trip"

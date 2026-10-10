@@ -316,11 +316,12 @@ secret because it contains a SAS signature.
 
 ## Algorithm demonstration workflows
 
-`TeleportationWorkflow` is documented above. The ten original algorithm workflows are listed here.
-Each listed workflow has its own `workflow.json`; the visual workflows construct an ordered circuit
-in the designer, and the executor runs it. POST `{}` or
-`{"shots":100}` to a workflow's Request trigger (1-1,000 shots per circuit). These are **small fixed
-instances**, not general-purpose implementations accepting arbitrary oracles or problem sizes.
+`TeleportationWorkflow` is documented above. The ten original algorithm workflows, a three-qubit
+Grover example, and a fixed factoring-15 example are listed here. Each has its own `workflow.json`;
+most demonstrations build circuits with individual designer gate actions, while Shor 15 supplies an
+explicit 25-gate list to the Run circuit action. POST `{}` or `{"shots":100}` to a workflow's Request
+trigger (1-1,000 shots per circuit). These are **small fixed instances**, not general-purpose
+implementations accepting arbitrary oracles or problem sizes.
 
 | Workflow | Demonstration and expected result |
 |---|---|
@@ -329,8 +330,10 @@ instances**, not general-purpose implementations accepting arbitrary oracles or 
 | `DeutschJozsaWorkflow` | Two input bits and an ancilla; balanced parity oracle `x0 XOR x1`. Input measurements are `11`; reports `balanced`. |
 | `BernsteinVaziraniWorkflow` | Three-bit secret `101` encoded with CNOTs and phase kickback. Reports recovered secret `101`; final ancilla bit varies. |
 | `GroverWorkflow` | Two-qubit search, marked item `11`, one oracle/diffusion iteration. Measures `11`. |
+| `GroverThreeQubitWorkflow` | Starts at `000`, searches eight states for `111` with one oracle/diffusion iteration. Ideal probability of `111` is 25/32 (78.125%); each other state has probability 1/32 (3.125%). |
 | `QuantumFourierTransformWorkflow` | Two-qubit QFT on `01`, with a second independently prepared QFT/inverse-QFT circuit. Forward Z measurements are uniform in expectation; round trip measures `01`. Controlled phases are decomposed into Rz and CNOT gates. |
 | `QuantumPhaseEstimationWorkflow` | Two counting qubits estimate the eigenphase of S on `|1>`. Reports phase `0.25` and counting bits `01`; last bit is the eigenstate qubit. |
+| `Shor15Workflow` | Fixed Shor order finding for `N=15`, `a=2`: six qubits, 25 gates, and inverse QFT. Informative phase `01` or `11` gives order 4 and factors `[3,5]`; otherwise reports `inconclusive`. |
 | `SimonWorkflow` | Two-input oracle `f(x)=x0 XOR x1`, period `11`. Measures input strings `00` or `11`; an observed `11` recovers the period for this two-bit instance. Reports `inconclusive` if finite sampling gives no informative equation. This is not a general GF(2) solver. |
 | `SuperdenseCodingWorkflow` | Creates a Bell pair, encodes fixed message `11`, and decodes it. Reports `11`. |
 | `GhzWorkflow` | Three-qubit GHZ preparation. Measures only `000` or `111`. |
@@ -341,9 +344,54 @@ VQE and QAOA return `evaluations`, `bestParameters`, `bestObjective`, and `bestC
 builds a fresh circuit and measures it before classical comparison. Their sweeps are deliberately
 small demonstrations rather than full numerical optimizers. Measurement noise can affect which
 candidate wins a tie. The ten original algorithm demonstrations use computational-basis initialization
-and final-only measurement; general teleportation, adaptive error correction and practical Shor factoring
-are outside their scope. The separate measurement-control and teleportation workflows exercise the
-mid-circuit subset.
+and final-only measurement; general teleportation, adaptive error correction, and scalable Shor
+factoring are outside their scope. The separate measurement-control and teleportation workflows
+exercise the mid-circuit subset.
+
+### Three-qubit Grover search
+
+`GroverThreeQubitWorkflow` chains 21 visible builder gate actions: H on qubits 0-2 creates an
+equal superposition of eight states; H(2)-Toffoli(0,1,2)-H(2) marks `111` with a phase flip;
+then H on all qubits, X on all qubits, the same three-gate controlled phase, X on all qubits,
+and H on all qubits implement diffusion (up to an irrelevant global phase). The entire circuit
+executes coherently in one Q# call per shot; measurement happens at the end. POST `{"shots":100}`
+to its Request callback; the response includes `markedState: "111"`, the constructed `circuit`,
+and `circuitResult.counts` and `circuitResult.probabilities`. With one Grover iteration, the
+**ideal** probabilities are 78.125% for `111` and 3.125% for each of the other seven states.
+Shot counts fluctuate, so the measured result is not guaranteed to be `111` on every run;
+zero-count states may be omitted from the result. The marked item and iteration count are fixed
+for this educational example. The original two-qubit `GroverWorkflow` remains unchanged.
+
+### Factoring 15 with Shor's order-finding circuit
+
+`Shor15Workflow` fixes `N=15` and coprime base `a=2`; its HTTP request only accepts optional
+`shots` (default 100). The six-qubit initial state is `000001`: counting qubits 0 and 1 start at
+zero and work qubits 2-5 encode the integer 1 (most-significant bit first). Hadamards prepare the
+counting register. Controlled `U^2` on qubit 0 and controlled `U` on qubit 1 implement
+`U|x> = |2x mod 15>` on the work register. For 4-bit inputs, `U` is a left bit rotation
+(three swaps) and `U^2` rotates by two bits (two swaps); each controlled swap is decomposed as
+`CNOT(a,b); TOFFOLI(control,b,a); CNOT(a,b)`. This is reversible for all 16 work states,
+including 0 and 15, and is not a fabricated phase oracle. A two-qubit inverse QFT follows,
+using SWAP, H, CNOT and Rz gates. All 25 gates execute coherently in one FullState simulator shot.
+
+The first two measured bits are the estimated phase `00`, `01`, `10`, or `11` (numerator over 4);
+the remaining four bits are the work register. The workflow filters the *per-shot* Boolean
+measurements for `01` or `11`: continued-fraction denominators yield order `r=4`, verified here
+by `2^4 mod 15 = 1` (and `2^2 mod 15 != 1`). Fixed classical post-processing then gives
+`gcd(2^(r/2)-1,15)=3` and `gcd(2^(r/2)+1,15)=5`. Only when an informative phase occurs does
+the response report `status: factored`, `order: 4`, `factors: [3,5]`; otherwise it reports
+`status: inconclusive`, `order: 0`, `factors: []`. `informativeShots` and `observedPhaseBits`
+show the evidence; `circuitResult` contains every raw outcome. The success chance per shot is
+1/2, so the chance of no informative result after `shots` independent runs is `(1/2)^shots`.
+The circuit, modular arithmetic, order, and gcd results are **specialized to 15 and 2**; this
+is a genuine small order-finding demonstration, not a general-purpose Shor compiler, scalable
+modular exponentiator, or arbitrary-number factorizer.
+
+For example, POST `{"shots":100}` to the `Shor15Workflow` Request callback. When at least one
+informative phase is observed, the response includes `{"algorithm":"Shor15","modulus":15,
+"base":2,"status":"factored","order":4,"factors":[3,5]}` alongside the actual
+`informativeShots`, `observedPhaseBits`, and `circuitResult`. With one uninformative shot, it
+instead returns `{"status":"inconclusive","order":0,"factors":[]}`.
 
 `deploy\Test-AlgorithmWorkflows.ps1` supplies algorithm-specific assertions. `deploy.ps1` runs them
 after publishing, including QFT reversibility, phase recovery, Simon's finite-shot recovery rule,
@@ -353,9 +401,13 @@ random 50/50 split. `deploy\Test-ReusableOperationWorkflow.ps1` checks typed reu
 Boolean measurement arrays and invalid-type rejection. `deploy\Test-MeasurementControlWorkflow.ps1`
 checks measurement collapse, reset, true/else branches, the generic HTTP path and invalid forward
 references. `deploy\Test-TeleportationWorkflow.ps1` checks Bell measurement, feed-forward corrections
-and deterministic verification of the teleported `|+>` state. Run `dotnet run --project
+and deterministic verification of the teleported `|+>` state. `deploy\Test-Shor15Workflow.ps1`
+checks the factoring example's measured phase/work-register states and response against its raw
+shot histogram. The algorithm suite also checks the 21-step Grover circuit and its measured
+25/32 marked-state probability at 1,000 shots. Run `dotnet run --project
 .\tests\QuantumCircuit.ReferenceTests -c Release` to compare executor shots with native Q# reference
-programs and reject malformed control flow. All workflows use the Q# full-state simulator.
+programs, reject malformed control flow, and exercise the Shor circuit directly. All workflows
+use the Q# full-state simulator.
 
 To run these suites against a local host without provisioning Azure:
 
@@ -365,12 +417,15 @@ To run these suites against a local host without provisioning Azure:
 . .\deploy\Test-ReusableOperationWorkflow.ps1
 . .\deploy\Test-MeasurementControlWorkflow.ps1
 . .\deploy\Test-TeleportationWorkflow.ps1
+. .\deploy\Test-Shor15Workflow.ps1
 $resolver = { param($name) (Invoke-RestMethod -Method Post -Uri "http://localhost:7071/runtime/webhooks/workflow/api/management/workflows/$name/triggers/When_a_HTTP_request_is_received/listCallbackUrl?api-version=2020-05-01-preview").value }
 Test-AlgorithmWorkflows -GetCallbackUrl $resolver
+Test-AlgorithmWorkflows -GetCallbackUrl $resolver -OnlyWorkflow GroverThreeQubitWorkflow -Shots 1000
 Test-BeginnerGateWorkflows -GetCallbackUrl $resolver
 Test-ReusableOperationWorkflow -GetCallbackUrl $resolver
 Test-MeasurementControlWorkflow -GetCallbackUrl $resolver
 Test-TeleportationWorkflow -GetCallbackUrl $resolver
+Test-Shor15Workflow -GetCallbackUrl $resolver
 dotnet run --project .\tests\QuantumCircuit.ReferenceTests -c Release
 ```
 
