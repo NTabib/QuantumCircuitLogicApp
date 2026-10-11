@@ -17,6 +17,13 @@
         "id": "/serviceProviders/quantumCircuit"
       },
       "displayName": "Quantum Circuit (Q# simulator)"
+    },
+    "azureQuantumCircuit": {
+      "parameterValues": {},
+      "serviceProvider": {
+        "id": "/serviceProviders/azureQuantumCircuit"
+      },
+      "displayName": "Azure Quantum (QDK backend)"
     }
   },
   "managedApiConnections": {}

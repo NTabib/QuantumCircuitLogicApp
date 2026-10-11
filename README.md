@@ -427,7 +427,74 @@ Test-MeasurementControlWorkflow -GetCallbackUrl $resolver
 Test-TeleportationWorkflow -GetCallbackUrl $resolver
 Test-Shor15Workflow -GetCallbackUrl $resolver
 dotnet run --project .\tests\QuantumCircuit.ReferenceTests -c Release
+python -m unittest discover -s .\tests\AzureQuantumBackendTests -v
 ```
+
+## Azure Quantum hardware execution path
+
+The existing `quantumCircuit/runCircuit` service provider remains the local Q# `FullState`
+simulator. A separate `azureQuantumCircuit/runCircuit` operation and `AzureQuantumBellWorkflow`
+use the same visual builder, then POST the completed circuit to a separate Python Azure Functions
+backend. That backend converts the supported instructions to a Qiskit circuit, submits it through
+Microsoft's `qdk.azure.qiskit` adapter to the configured Azure Quantum workspace target, waits for
+the job, and returns the target, job ID, measured counts, probabilities, and actual shot count.
+The new path does not replace or change any existing simulation workflow.
+
+This deliberately runs the Azure Quantum submission service in a separate **Linux Python 3.11
+Function App**; it does not load the current classic Q# SDK into the Logic Apps .NET process. The
+backend source is `src\QuantumCircuit.AzureQuantumBackend`. Create a Function App with Functions v4,
+configure its `AZURE_QUANTUM_WORKSPACE_RESOURCE_ID`, `AZURE_QUANTUM_TARGET_ID`, and
+`AZURE_QUANTUM_JOB_TIMEOUT_SECONDS` app settings, then grant its system-assigned managed identity
+the Azure Quantum workspace role that permits job submission and result reading (currently
+**Quantum Workspace Data Contributor**). From the backend source directory, publish it with:
+
+```powershell
+func azure functionapp publish <backend-function-app-name> --python --build remote
+```
+
+The backend uses `DefaultAzureCredential`: locally, sign in with `az login`; in Azure, it uses the
+Function App's managed identity. The deploy script currently assigns **Quantum Workspace Data
+Contributor**; check the workspace's current Azure Quantum RBAC guidance and assign the equivalent
+least-privilege job submit/read role if that role name is unavailable in your tenant. Select a target
+available in that workspace and compatible with the circuit. This deployment defaults to Rigetti's
+free cloud simulator, `rigetti.sim.qvm`, which accepts Qiskit programs. The Rigetti hardware target is
+`rigetti.qpu.cepheus-1-108q`; verify workspace/provider access and pricing before selecting it. See
+the [Rigetti target documentation](https://learn.microsoft.com/azure/quantum/provider-rigetti).
+
+To create and configure the separate backend and its managed identity, run
+`deploy\Deploy-AzureQuantumBackend.ps1` after the Logic App, storage account, and Azure Quantum
+workspace exist:
+
+```powershell
+.\deploy\Deploy-AzureQuantumBackend.ps1 `
+  -ResourceGroup <resource-group> `
+  -LogicAppName <logic-app-name> `
+  -FunctionAppName <globally-unique-function-app-name> `
+  -StorageAccountName <existing-storage-account-name> `
+  -Location <function-app-region> `
+  -WorkspaceResourceId <quantum-workspace-resource-id> `
+  -TargetId rigetti.sim.qvm
+```
+
+The script grants the backend Function App identity the workspace data-contributor role, publishes
+the Python app, and sets `AZURE_QUANTUM_BACKEND_URL` plus the function-scoped key as Logic App host
+settings (not in source control). For production, replace the key setting with a Key Vault reference.
+The function key protects the backend HTTP endpoint; the backend identity, not the Logic App, accesses
+the Quantum workspace. `connections.json` registers the new service provider without embedding
+credentials. The existing `deploy\deploy.ps1` deliberately does not create a workspace or backend;
+run this separate setup before calling `AzureQuantumBellWorkflow`. The Azure Quantum workspace and
+provider must already be provisioned and the configured target must be enabled in that workspace.
+
+The hardware path accepts computational-basis initial states, supported unitary gates (`H`, `X`,
+`Y`, `Z`, `S`, `S_DAG`, `T`, `T_DAG`, `CNOT`, `CZ`, `SWAP`, `TOFFOLI`, `RX`, `RY`, `RZ`) and
+terminal measurements. It explicitly rejects mid-circuit `MEASURE`, `RESET`, `IF`, and reusable
+`CALL`; use the simulator path for those workflows. Target-specific gate/profile limits still apply.
+The sample workflow submits H(0), CNOT(0,1), so its ideal counts are split between `00` and `11`;
+real QPU noise and finite shots affect the observed distribution. The backend waits synchronously
+for up to 180 seconds, while the connector HTTP timeout is 210 seconds. A remote job may continue
+after a synchronous timeout; automatic workflow retry is disabled to avoid accidental duplicate
+submissions, so inspect the workspace job status before rerunning. Use a simulator target first:
+QPU submissions may incur provider charges.
 
 ## 5. Run locally
 
@@ -471,10 +538,11 @@ secret store (it contains a SAS signature).
 
 ## Notes & limitations
 
-* **QDK version**: the in-process .NET simulators exist only in the *classic* QDK (`Microsoft.Quantum.Sdk`
-  0.28, last release). The *Modern QDK* (Q# 1.x) is Rust/Python/JS based and has no .NET API. To target
-  real hardware or the Modern QDK, replace `QuantumCircuitExecutor` with a compatible Azure Quantum
-  job adapter (for example, compiling and submitting QIR/OpenQASM) while preserving the workflow contract.
+* **QDK version**: the local in-process .NET simulator uses the *classic* QDK
+  (`Microsoft.Quantum.Sdk` 0.28, last release). The separate, optional Azure Quantum path uses the
+  Python QDK Azure/Qiskit adapter; it does not replace the simulator or load the classic SDK in its
+  Function App. Actual QPU execution depends on the selected workspace target, provider availability,
+  circuit compatibility, and provider billing.
 * The full-state simulator is limited to 20 qubits for `runCircuit` (state-vector memory grows
   exponentially); the application also caps circuits at 256 gates and 1,000 shots.
 * The X gate on a basis state is deterministic, so `counts` is always 100 % on the flipped value. By

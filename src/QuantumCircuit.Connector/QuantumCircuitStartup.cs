@@ -21,8 +21,10 @@ namespace QuantumCircuit.Connector
         {
             builder.AddExtension<QuantumCircuitServiceProvider>();
             builder.AddExtension<QuantumCircuitBuilderServiceProvider>();
+            builder.AddExtension<AzureQuantumCircuitServiceProvider>();
             builder.Services.TryAddSingleton<QuantumCircuitServiceOperationProvider>();
             builder.Services.TryAddSingleton<QuantumCircuitBuilderServiceOperationProvider>();
+            builder.Services.TryAddSingleton<AzureQuantumCircuitServiceOperationProvider>();
         }
     }
 
