@@ -435,13 +435,13 @@ python -m unittest discover -s .\tests\AzureQuantumBackendTests -v
 The existing `quantumCircuit/runCircuit` service provider remains the local Q# `FullState`
 simulator. A separate `azureQuantumCircuit/runCircuit` operation and `AzureQuantumBellWorkflow`
 use the same visual builder, then POST the completed circuit to a separate Python Azure Functions
-backend. That backend converts the supported instructions to a Qiskit circuit, submits it through
-Microsoft's `qdk.azure.qiskit` adapter to the configured Azure Quantum workspace target, waits for
+backend. That backend converts the supported instructions to a native Quil program, submits it through
+Microsoft's `azure.quantum.target.rigetti` adapter to the configured Azure Quantum Rigetti target, waits for
 the job, and returns the target, job ID, measured counts, probabilities, and actual shot count.
 The new path does not replace or change any existing simulation workflow.
 
 This deliberately runs the Azure Quantum submission service in a separate **Linux Python 3.11
-Function App**; it does not load the current classic Q# SDK into the Logic Apps .NET process. The
+Function App**; its cloud execution is independent of the classic Q# SDK used by the local simulator. The
 backend source is `src\QuantumCircuit.AzureQuantumBackend`. Create a Function App with Functions v4,
 configure its `AZURE_QUANTUM_WORKSPACE_RESOURCE_ID`, `AZURE_QUANTUM_TARGET_ID`, and
 `AZURE_QUANTUM_JOB_TIMEOUT_SECONDS` app settings, then grant its system-assigned managed identity
@@ -457,9 +457,10 @@ Function App's managed identity. The deploy script currently assigns **Quantum W
 Contributor**; check the workspace's current Azure Quantum RBAC guidance and assign the equivalent
 least-privilege job submit/read role if that role name is unavailable in your tenant. Select a target
 available in that workspace and compatible with the circuit. This deployment defaults to Rigetti's
-free cloud simulator, `rigetti.sim.qvm`, which accepts Qiskit programs. The Rigetti hardware target is
+free cloud simulator, `rigetti.sim.qvm`, which accepts Quil programs. The Rigetti hardware target is
 `rigetti.qpu.cepheus-1-108q`; verify workspace/provider access and pricing before selecting it. See
 the [Rigetti target documentation](https://learn.microsoft.com/azure/quantum/provider-rigetti).
+This backend now supports Rigetti targets only. Other providers require a separate compatible adapter.
 
 To create and configure the separate backend and its managed identity, run
 `deploy\Deploy-AzureQuantumBackend.ps1` after the Logic App, storage account, and Azure Quantum
@@ -481,7 +482,14 @@ the Python app, and sets `AZURE_QUANTUM_BACKEND_URL` plus the function-scoped ke
 settings (not in source control). For production, replace the key setting with a Key Vault reference.
 The function key protects the backend HTTP endpoint; the backend identity, not the Logic App, accesses
 the Quantum workspace. `connections.json` registers the new service provider without embedding
-credentials. The existing `deploy\deploy.ps1` deliberately does not create a workspace or backend;
+credentials. Its `serviceProviderConnections.azureQuantumCircuit.parameterValues` must be
+`{"backend":"AzureQuantum"}`, not `{}`: Logic Apps requires nonempty connection values even when
+authentication is configured through host settings. For a designer-created connection, set
+**Backend** to `AzureQuantum`. If `Run_on_Azure_Quantum` fails with
+`MissingServiceProviderConnectionParameterValues`, redeploy the corrected Logic App connector
+and `connections.json` together, or update the deployed connection values and save the workflow.
+Redeploying only the Python Function App does not update the Logic App connection.
+The existing `deploy\deploy.ps1` deliberately does not create a workspace or backend;
 run this separate setup before calling `AzureQuantumBellWorkflow`. The Azure Quantum workspace and
 provider must already be provisioned and the configured target must be enabled in that workspace.
 
@@ -495,6 +503,36 @@ for up to 180 seconds, while the connector HTTP timeout is 210 seconds. A remote
 after a synchronous timeout; automatic workflow retry is disabled to avoid accidental duplicate
 submissions, so inspect the workspace job status before rerunning. Use a simulator target first:
 QPU submissions may incur provider charges.
+
+If publishing shows an empty `Functions in ...` list followed by `Error retrieving function keys`,
+the Python host may have failed to index `function_app.py`. Check the backend's Application Insights
+exceptions or Log stream for the underlying import error. The backend imports `azure.quantum` and
+`azure.quantum.target.rigetti`, installed through the core `azure-quantum` package in
+`requirements.txt`; `qdk.azure` is not the adapter namespace. Native Quil submission avoids the
+QDK/Qiskit extra's Linux wheels, which require glibc 2.35 and cannot be installed by the
+Debian Bullseye Oryx builder. No QDK or Qiskit runtime is required by this backend.
+Republish from `src\QuantumCircuit.AzureQuantumBackend` with
+`func azure functionapp publish <backend-function-app-name> --python --build remote`, or rerun
+`deploy\Deploy-AzureQuantumBackend.ps1` with the same parameters to also configure the Logic App key.
+The deployment script waits for discovery of `run_quantum_circuit` and its key before configuring
+the Logic App; it fails with indexing guidance if the function remains unavailable.
+
+If Core Tools reports `Failed to retrieve remote build status`, that is not confirmation of a
+successful deployment. The deployment script uses Azure CLI ZIP deployment with `--build-remote true`
+and a 20-minute deployment timeout, and packages only `function_app.py`, `host.json`, and
+`requirements.txt` (not local Python packages or caches). It stops on a build failure before
+requesting function keys and synchronizes the deployed function triggers before checking discovery.
+Inspect the remote deployment and its build log with:
+
+```powershell
+az webapp log deployment list --resource-group <resource-group> --name <backend-function-app-name>
+az webapp log deployment show --resource-group <resource-group> --name <backend-function-app-name> --deployment-id <deployment-id>
+```
+
+Deployment status `4` means success; `3` means failure; `0`, `1`, and `2` mean deployment has not
+completed. If a build remains stuck at dependency installation, inspect the detailed Oryx log
+linked from the deployment log before starting another deployment. SCM basic authentication is
+not required to use the deployment script; do not enable it merely to bypass this status error.
 
 ## 5. Run locally
 
@@ -540,7 +578,7 @@ secret store (it contains a SAS signature).
 
 * **QDK version**: the local in-process .NET simulator uses the *classic* QDK
   (`Microsoft.Quantum.Sdk` 0.28, last release). The separate, optional Azure Quantum path uses the
-  Python QDK Azure/Qiskit adapter; it does not replace the simulator or load the classic SDK in its
+  Python Azure Quantum SDK with Rigetti's native Quil adapter; it does not replace the simulator or load the classic SDK in its
   Function App. Actual QPU execution depends on the selected workspace target, provider availability,
   circuit compatibility, and provider billing.
 * The full-state simulator is limited to 20 qubits for `runCircuit` (state-vector memory grows

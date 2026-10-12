@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Deploys the separate Python QDK backend and grants it access to an Azure Quantum workspace.
+  Deploys the separate Python Rigetti backend and grants it access to an Azure Quantum workspace.
 
 .EXAMPLE
   .\Deploy-AzureQuantumBackend.ps1 -ResourceGroup rg-quantum -LogicAppName qcirc-la `
@@ -16,6 +16,7 @@ param(
 	[Parameter(Mandatory = $true)] [string] $StorageAccountName,
 	[Parameter(Mandatory = $true)] [string] $Location,
 	[Parameter(Mandatory = $true)] [string] $WorkspaceResourceId,
+	# [ValidatePattern('^rigetti\.(sim\.qvm|qpu\.[a-zA-Z0-9-]+)$')]
 	[string] $TargetId = 'rigetti.sim.qvm'
 )
 
@@ -77,24 +78,65 @@ if ([int]$existingRoleCount -eq 0) {
 	} 'Granting the backend identity Azure Quantum job access'
 }
 
-Invoke-Checked {
-	Push-Location $backendDirectory
-	try {
-		func azure functionapp publish $FunctionAppName --python --build remote
-	} finally {
-		Pop-Location
+$archivePath = Join-Path $root 'artifacts\azure-quantum-backend.zip'
+$null = New-Item -ItemType Directory -Path (Split-Path -Parent $archivePath) -Force
+Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+$archiveStream = [System.IO.File]::Open($archivePath, [System.IO.FileMode]::Create)
+$archive = New-Object System.IO.Compression.ZipArchive($archiveStream, [System.IO.Compression.ZipArchiveMode]::Create)
+try {
+	foreach ($fileName in @('function_app.py', 'host.json', 'requirements.txt')) {
+		$null = [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+			$archive, (Join-Path $backendDirectory $fileName), $fileName)
 	}
-} 'Publishing the QDK-backed Azure Function'
+} finally {
+	$archive.Dispose()
+	$archiveStream.Dispose()
+}
+
+Invoke-Checked {
+	az functionapp deployment source config-zip `
+		--resource-group $ResourceGroup `
+		--name $FunctionAppName `
+		--src $archivePath `
+		--build-remote true `
+		--timeout 1200 `
+		--output none
+} "Publishing the Python backend and waiting for its remote build (up to 20 minutes). On failure, inspect https://$FunctionAppName.scm.azurewebsites.net/api/deployments"
+
+$functionAppId = az functionapp show --resource-group $ResourceGroup --name $FunctionAppName --query id --output tsv
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($functionAppId)) {
+	throw 'Could not retrieve the Function App resource ID for trigger synchronization.'
+}
+Invoke-Checked {
+	az rest --method post --uri "$functionAppId/syncfunctiontriggers?api-version=2023-12-01" --output none
+} 'Synchronizing the deployed backend function triggers'
 
 $backendUrl = "https://$FunctionAppName.azurewebsites.net/api/run-quantum-circuit"
-$functionKey = az functionapp function keys list `
-	--resource-group $ResourceGroup `
-	--name $FunctionAppName `
-	--function-name run_quantum_circuit `
-	--query default `
-	--output tsv
-if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($functionKey)) {
-	throw 'Could not retrieve the run_quantum_circuit function key.'
+$functionKey = $null
+for ($attempt = 1; $attempt -le 12; $attempt++) {
+	$functionNames = az functionapp function list `
+		--resource-group $ResourceGroup `
+		--name $FunctionAppName `
+		--query "[].name" `
+		--output tsv
+	if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the published backend functions.' }
+
+	if (@($functionNames | Where-Object { ($_ -split '/')[-1] -eq 'run_quantum_circuit' }).Count -gt 0) {
+		$functionKey = az functionapp function keys list `
+			--resource-group $ResourceGroup `
+			--name $FunctionAppName `
+			--function-name run_quantum_circuit `
+			--query default `
+			--output tsv
+		if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($functionKey)) { break }
+		$functionKey = $null
+	}
+
+	Write-Warning "Waiting for run_quantum_circuit discovery and keys ($attempt/12)."
+	if ($attempt -lt 12) { Start-Sleep -Seconds 10 }
+}
+if ([string]::IsNullOrWhiteSpace($functionKey)) {
+	throw 'run_quantum_circuit was not ready after publishing. Check Function App Log stream or Application Insights for Python import/indexing errors and the remote build log for requirements.txt installation failures. The Logic App endpoint was not configured.'
 }
 
 Invoke-Checked {

@@ -19,11 +19,13 @@
       "displayName": "Quantum Circuit (Q# simulator)"
     },
     "azureQuantumCircuit": {
-      "parameterValues": {},
+      "parameterValues": {
+        "backend": "AzureQuantum"
+      },
       "serviceProvider": {
         "id": "/serviceProviders/azureQuantumCircuit"
       },
-      "displayName": "Azure Quantum (QDK backend)"
+      "displayName": "Azure Quantum (Rigetti backend)"
     }
   },
   "managedApiConnections": {}

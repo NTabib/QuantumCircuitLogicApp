@@ -113,7 +113,7 @@
           "body": {
             "workflowRunId": "@workflow()?['run']?['name']",
             "algorithm": "AzureQuantumBell",
-            "description": "H(0), CNOT(0,1); the QDK Azure backend submits this circuit to the configured workspace target and waits for its job.",
+            "description": "H(0), CNOT(0,1); the Azure Quantum backend submits this circuit as Quil to the configured Rigetti target and waits for its job.",
             "circuit": "@body('Entangle_qubits')?['circuit']",
             "quantumJob": "@body('Run_on_Azure_Quantum')"
           }

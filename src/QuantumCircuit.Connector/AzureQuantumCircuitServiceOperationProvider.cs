@@ -20,8 +20,10 @@ namespace QuantumCircuit.Connector
         public const string ServiceName = "azureQuantumCircuit";
         public const string ServiceId = "/serviceProviders/azureQuantumCircuit";
         public const string RunCircuitOperationId = "runCircuit";
+        public const string Backend = "AzureQuantum";
 
         private const uint BrandColor = 0x0078D4;
+        private static readonly Uri IconUri = CreateIconUri();
         private static readonly HttpClient HttpClient = new HttpClient
         {
             Timeout = TimeSpan.FromSeconds(210),
@@ -63,6 +65,16 @@ namespace QuantumCircuit.Connector
                     HttpStatusCode.BadRequest,
                     ServiceOperationsErrorResponseCode.ServiceOperationIdNotSupported,
                     $"Operation '{operationId}' is not supported by the {ServiceName} connector.",
+                    null);
+            }
+
+            if (connectionParameters == null || !connectionParameters.TryGetValue("backend", out var backend)
+                || backend?.Type != JTokenType.String || backend.Value<string>() != Backend)
+            {
+                throw new ServiceOperationsProviderException(
+                    HttpStatusCode.BadRequest,
+                    ServiceOperationsErrorResponseCode.InvalidServiceProviderConnection,
+                    $"Connection backend must be '{Backend}'.",
                     null);
             }
 
@@ -179,12 +191,28 @@ namespace QuantumCircuit.Connector
             Properties = new ServiceOperationApiProperties
             {
                 BrandColor = BrandColor,
-                Description = "Submits a gate-only circuit to an Azure Quantum target through the QDK-backed Azure Function backend.",
+                Description = "Submits a gate-only circuit to a Rigetti target through the Azure Quantum Python backend.",
                 DisplayName = "Azure Quantum Circuit",
+                IconUri = IconUri,
                 Capabilities = new[] { ApiCapability.Actions },
                 ConnectionParameters = new ConnectionParameters
                 {
-                    AdditionalParameters = new InsensitiveDictionary<ConnectionStringParameters>(),
+                    AdditionalParameters = new InsensitiveDictionary<ConnectionStringParameters>
+                    {
+                        { "backend", new ConnectionStringParameters
+                            {
+                                Type = ConnectionStringType.StringType,
+                                ParameterSource = ConnectionParameterSource.AppConfiguration,
+                                UIDefinition = new UIDefinition
+                                {
+                                    DisplayName = "Backend",
+                                    Description = "Use AzureQuantum. The workspace target is configured on the Python backend.",
+                                    Tooltip = Backend,
+                                    Constraints = new Constraints { Required = "true", Default = Backend },
+                                },
+                            }
+                        },
+                    },
                 },
             },
         };
@@ -198,12 +226,20 @@ namespace QuantumCircuit.Connector
             {
                 Api = BuildServiceOperationApi().GetFlattenedApi(),
                 Summary = "Run a circuit on Azure Quantum",
-                Description = "Converts supported unitary gate instructions to a Qiskit circuit, submits it to the configured Azure Quantum target, waits for completion, and returns measured counts.",
+                Description = "Converts supported unitary gate instructions to Quil, submits it to the configured Azure Quantum Rigetti target, waits for completion, and returns measured counts.",
                 Visibility = Visibility.Important,
                 OperationType = OperationType.ServiceProvider,
                 BrandColor = BrandColor,
+                IconUri = IconUri,
             },
         };
+
+        private static Uri CreateIconUri()
+        {
+            const string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 32 32\"><rect x=\"1\" y=\"1\" width=\"30\" height=\"30\" rx=\"7\" fill=\"#E6F2FF\" stroke=\"#0078D4\" stroke-width=\"1.5\"/><path d=\"M5 11h5l3 10 5-14 4 11 2-7h3\" fill=\"none\" stroke=\"#0078D4\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/><circle cx=\"13\" cy=\"21\" r=\"2\" fill=\"#5C2D91\"/><circle cx=\"22\" cy=\"18\" r=\"2\" fill=\"#5C2D91\"/></svg>";
+            var encodedSvg = Convert.ToBase64String(Encoding.UTF8.GetBytes(svg));
+            return new Uri($"data:image/svg+xml;base64,{encodedSvg}", UriKind.Absolute);
+        }
 
         private static ServiceOperationManifest BuildManifest() => new ServiceOperationManifest
         {
@@ -278,7 +314,7 @@ namespace QuantumCircuit.Connector
                             Title = "Azure Quantum job result",
                             Properties = new OrdinalDictionary<SwaggerSchema>
                             {
-                                { "backend", StringSchema("Backend", "Azure Quantum Qiskit adapter.") },
+                                { "backend", StringSchema("Backend", "Azure Quantum native Rigetti adapter.") },
                                 { "provider", StringSchema("Provider", "Azure Quantum provider identifier.") },
                                 { "targetId", StringSchema("Target", "Azure Quantum provider target ID.") },
                                 { "jobId", StringSchema("Job ID", "Submitted Azure Quantum job.") },

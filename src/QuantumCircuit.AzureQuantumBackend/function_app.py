@@ -2,12 +2,13 @@ import json
 import logging
 import math
 import os
+from dataclasses import dataclass
+from numbers import Integral
 
 import azure.functions as func
 from azure.identity import DefaultAzureCredential
-from qdk.azure import Workspace
-from qdk.azure.qiskit import AzureQuantumProvider
-from qiskit import QuantumCircuit
+from azure.quantum import Workspace
+from azure.quantum.target.rigetti import Rigetti, Result
 
 
 app = func.FunctionApp()
@@ -16,7 +17,13 @@ MAX_GATES = 256
 MAX_SHOTS = 1000
 
 
-def build_circuit(payload: dict) -> tuple[QuantumCircuit, int]:
+@dataclass(frozen=True)
+class CircuitProgram:
+    quil: str
+    num_qubits: int
+
+
+def build_circuit(payload: dict) -> tuple[CircuitProgram, int]:
     initial_state = payload.get("initialState")
     gates = payload.get("gates")
     shots = payload.get("shots", 100)
@@ -31,10 +38,10 @@ def build_circuit(payload: dict) -> tuple[QuantumCircuit, int]:
         raise ValueError(f"shots must be an integer between 1 and {MAX_SHOTS}.")
 
     qubit_count = len(initial_state)
-    circuit = QuantumCircuit(qubit_count, qubit_count)
+    lines = [f"DECLARE ro BIT[{qubit_count}]"]
     for qubit, bit in enumerate(initial_state):
         if bit == "1":
-            circuit.x(qubit)
+            lines.append(f"X {qubit}")
 
     for index, instruction in enumerate(gates):
         if not isinstance(instruction, dict) or not isinstance(instruction.get("gate"), str):
@@ -48,44 +55,31 @@ def build_circuit(payload: dict) -> tuple[QuantumCircuit, int]:
 
         target = _qubit_index(instruction, "target", qubit_count, index)
         if gate in {"H", "X", "Y", "Z", "S", "S_DAG", "SDG", "T", "T_DAG", "TDG"}:
-            {
-                "H": circuit.h,
-                "X": circuit.x,
-                "Y": circuit.y,
-                "Z": circuit.z,
-                "S": circuit.s,
-                "S_DAG": circuit.sdg,
-                "SDG": circuit.sdg,
-                "T": circuit.t,
-                "T_DAG": circuit.tdg,
-                "TDG": circuit.tdg,
-            }[gate](target)
+            operation = {"S_DAG": "DAGGER S", "SDG": "DAGGER S",
+                         "T_DAG": "DAGGER T", "TDG": "DAGGER T"}.get(gate, gate)
+            lines.append(f"{operation} {target}")
         elif gate in {"CNOT", "CX", "CZ", "SWAP"}:
             control = _qubit_index(instruction, "control", qubit_count, index)
             if control == target:
                 raise ValueError(f"gates[{index}] control and target must differ.")
-            if gate in {"CNOT", "CX"}:
-                circuit.cx(control, target)
-            elif gate == "CZ":
-                circuit.cz(control, target)
-            else:
-                circuit.swap(control, target)
+            operation = "CNOT" if gate == "CX" else gate
+            lines.append(f"{operation} {control} {target}")
         elif gate in {"TOFFOLI", "CCNOT"}:
             control = _qubit_index(instruction, "control", qubit_count, index)
             control2 = _qubit_index(instruction, "control2", qubit_count, index)
             if len({control, control2, target}) != 3:
                 raise ValueError(f"gates[{index}] Toffoli qubits must be distinct.")
-            circuit.ccx(control, control2, target)
+            lines.append(f"CCNOT {control} {control2} {target}")
         elif gate in {"RX", "RY", "RZ"}:
             angle = instruction.get("angle")
             if isinstance(angle, bool) or not isinstance(angle, (int, float)) or not math.isfinite(angle):
                 raise ValueError(f"gates[{index}] '{gate}' requires a finite numeric angle.")
-            {"RX": circuit.rx, "RY": circuit.ry, "RZ": circuit.rz}[gate](float(angle), target)
+            lines.append(f"{gate}({float(angle)}) {target}")
         else:
             raise ValueError(f"gates[{index}] uses unsupported gate '{gate}'.")
 
-    circuit.measure(range(qubit_count), range(qubit_count))
-    return circuit, shots
+    lines.extend(f"MEASURE {qubit} ro[{qubit}]" for qubit in range(qubit_count))
+    return CircuitProgram("\n".join(lines) + "\n", qubit_count), shots
 
 
 def _qubit_index(instruction: dict, field: str, qubit_count: int, gate_index: int) -> int:
@@ -95,23 +89,22 @@ def _qubit_index(instruction: dict, field: str, qubit_count: int, gate_index: in
     return value
 
 
-def _normalize_counts(raw_counts: dict, qubit_count: int) -> dict[str, int]:
+def _normalize_readout(readout: list, qubit_count: int) -> dict[str, int]:
     counts: dict[str, int] = {}
-    for raw_state, count in raw_counts.items():
-        qiskit_bits = str(raw_state).replace(" ", "")
-        if len(qiskit_bits) != qubit_count or any(bit not in "01" for bit in qiskit_bits):
+    for shot in readout:
+        if len(shot) != qubit_count:
             raise RuntimeError("Azure Quantum returned a measurement with an unexpected bit width.")
-        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
-            raise RuntimeError("Azure Quantum returned an invalid measurement count.")
-        # Qiskit displays classical bit c[n-1] first; the connector uses qubit 0 first.
-        state = qiskit_bits[::-1]
-        counts[state] = counts.get(state, 0) + count
-    if not counts or sum(counts.values()) <= 0:
+        if any(not isinstance(bit, Integral) or bit not in (0, 1) for bit in shot):
+            raise RuntimeError("Azure Quantum returned an invalid measurement bit.")
+        # ro[i] stores qubit i, so native Rigetti readout is already qubit-0-first.
+        state = "".join(str(int(bit)) for bit in shot)
+        counts[state] = counts.get(state, 0) + 1
+    if not counts:
         raise RuntimeError("Azure Quantum returned no measurement counts.")
     return counts
 
 
-def execute(payload: dict, circuit: QuantumCircuit, requested_shots: int) -> dict:
+def execute(payload: dict, circuit: CircuitProgram, requested_shots: int) -> dict:
     workspace_resource_id = os.environ.get("AZURE_QUANTUM_WORKSPACE_RESOURCE_ID")
     target_id = os.environ.get("AZURE_QUANTUM_TARGET_ID")
     if not workspace_resource_id or not target_id:
@@ -119,6 +112,9 @@ def execute(payload: dict, circuit: QuantumCircuit, requested_shots: int) -> dic
             "Configure AZURE_QUANTUM_WORKSPACE_RESOURCE_ID and AZURE_QUANTUM_TARGET_ID "
             "on the Azure Quantum backend Function App."
         )
+
+    if target_id != "rigetti.sim.qvm" and not target_id.startswith("rigetti.qpu."):
+        raise RuntimeError("This backend supports Rigetti targets only; configure rigetti.sim.qvm or a Rigetti QPU.")
 
     timeout = int(os.environ.get("AZURE_QUANTUM_JOB_TIMEOUT_SECONDS", "180"))
     if not 1 <= timeout <= 180:
@@ -128,11 +124,16 @@ def execute(payload: dict, circuit: QuantumCircuit, requested_shots: int) -> dic
         resource_id=workspace_resource_id,
         credential=DefaultAzureCredential(),
     )
-    backend = AzureQuantumProvider(workspace).get_backend(target_id)
-    job = backend.run(circuit, shots=requested_shots)
-    job_id = job.job_id()
-    result = job.result(timeout=timeout)
-    counts = _normalize_counts(result.get_counts(circuit), circuit.num_qubits)
+    target = Rigetti(workspace=workspace, name=target_id)
+    job = target.submit(
+        input_data=circuit.quil,
+        name="logic-app-quantum-circuit",
+        shots=requested_shots,
+    )
+    job_id = job.id
+    logging.info("Azure Quantum job submitted: %s", job_id)
+    job.wait_until_completed(timeout_secs=timeout, print_progress=False)
+    counts = _normalize_readout(Result(job)["ro"], circuit.num_qubits)
     completed_shots = sum(counts.values())
 
     return {
@@ -151,7 +152,13 @@ def execute(payload: dict, circuit: QuantumCircuit, requested_shots: int) -> dic
     }
 
 
-@app.route(route="run-quantum-circuit", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
+@app.function_name(name="run_quantum_circuit")
+@app.route(
+    route="run-quantum-circuit",
+    methods=["POST"],
+    auth_level=func.AuthLevel.FUNCTION,
+    trigger_arg_name="request",
+)
 def run_quantum_circuit(request: func.HttpRequest) -> func.HttpResponse:
     try:
         payload = request.get_json()

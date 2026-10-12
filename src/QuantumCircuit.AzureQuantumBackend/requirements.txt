@@ -1,3 +1,3 @@
 azure-functions
 azure-identity
-qdk[azure,qiskit]
+azure-quantum>=3.13.0,<4

@@ -7,6 +7,12 @@ using Newtonsoft.Json.Linq;
 using QuantumCircuit.Connector;
 using QuantumCircuit.QSharp;
 
+await AzureQuantumConnectionTests.RunAsync();
+if (args.Contains("--azure-connection-only"))
+{
+    return;
+}
+
 var gates = JArray.Parse("""
 [
   { "gate": "MEASURE", "target": 0, "measurement": "measuredZero" },
