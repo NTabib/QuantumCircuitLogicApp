@@ -8,6 +8,8 @@ from numbers import Integral
 import azure.functions as func
 from azure.identity import DefaultAzureCredential
 from azure.quantum import Workspace
+from azure.quantum.target.ionq import IonQ
+from azure.quantum.target.quantinuum import Quantinuum
 from azure.quantum.target.rigetti import Rigetti, Result
 
 
@@ -20,6 +22,8 @@ MAX_SHOTS = 1000
 @dataclass(frozen=True)
 class CircuitProgram:
     quil: str
+    ionq_circuit: dict
+    openqasm: str
     num_qubits: int
 
 
@@ -38,10 +42,19 @@ def build_circuit(payload: dict) -> tuple[CircuitProgram, int]:
         raise ValueError(f"shots must be an integer between 1 and {MAX_SHOTS}.")
 
     qubit_count = len(initial_state)
-    lines = [f"DECLARE ro BIT[{qubit_count}]"]
+    quil_lines = [f"DECLARE ro BIT[{qubit_count}]"]
+    qasm_lines = [
+        "OPENQASM 2.0;",
+        'include "qelib1.inc";',
+        f"qreg q[{qubit_count}];",
+        f"creg ro[{qubit_count}];",
+    ]
+    ionq_gates = []
     for qubit, bit in enumerate(initial_state):
         if bit == "1":
-            lines.append(f"X {qubit}")
+            quil_lines.append(f"X {qubit}")
+            qasm_lines.append(f"x q[{qubit}];")
+            ionq_gates.append({"gate": "x", "target": qubit})
 
     for index, instruction in enumerate(gates):
         if not isinstance(instruction, dict) or not isinstance(instruction.get("gate"), str):
@@ -57,29 +70,59 @@ def build_circuit(payload: dict) -> tuple[CircuitProgram, int]:
         if gate in {"H", "X", "Y", "Z", "S", "S_DAG", "SDG", "T", "T_DAG", "TDG"}:
             operation = {"S_DAG": "DAGGER S", "SDG": "DAGGER S",
                          "T_DAG": "DAGGER T", "TDG": "DAGGER T"}.get(gate, gate)
-            lines.append(f"{operation} {target}")
+            quil_lines.append(f"{operation} {target}")
+            qasm_gate = {
+                "S_DAG": "sdg", "SDG": "sdg",
+                "T_DAG": "tdg", "TDG": "tdg",
+            }.get(gate, gate.lower())
+            qasm_lines.append(f"{qasm_gate} q[{target}];")
+            ionq_gate = {
+                "S_DAG": "si", "SDG": "si",
+                "T_DAG": "ti", "TDG": "ti",
+            }.get(gate, gate.lower())
+            ionq_gates.append({"gate": ionq_gate, "target": target})
         elif gate in {"CNOT", "CX", "CZ", "SWAP"}:
             control = _qubit_index(instruction, "control", qubit_count, index)
             if control == target:
                 raise ValueError(f"gates[{index}] control and target must differ.")
             operation = "CNOT" if gate == "CX" else gate
-            lines.append(f"{operation} {control} {target}")
+            quil_lines.append(f"{operation} {control} {target}")
+            if gate in {"CNOT", "CX"}:
+                qasm_lines.append(f"cx q[{control}],q[{target}];")
+                ionq_gates.append({"gate": "cnot", "control": control, "target": target})
+            elif gate == "CZ":
+                qasm_lines.append(f"cz q[{control}],q[{target}];")
+                ionq_gates.append({"gate": "z", "control": control, "target": target})
+            else:
+                qasm_lines.append(f"swap q[{control}],q[{target}];")
+                ionq_gates.append({"gate": "swap", "targets": [control, target]})
         elif gate in {"TOFFOLI", "CCNOT"}:
             control = _qubit_index(instruction, "control", qubit_count, index)
             control2 = _qubit_index(instruction, "control2", qubit_count, index)
             if len({control, control2, target}) != 3:
                 raise ValueError(f"gates[{index}] Toffoli qubits must be distinct.")
-            lines.append(f"CCNOT {control} {control2} {target}")
+            quil_lines.append(f"CCNOT {control} {control2} {target}")
+            qasm_lines.append(f"ccx q[{control}],q[{control2}],q[{target}];")
+            ionq_gates.append({"gate": "not", "controls": [control, control2], "target": target})
         elif gate in {"RX", "RY", "RZ"}:
             angle = instruction.get("angle")
             if isinstance(angle, bool) or not isinstance(angle, (int, float)) or not math.isfinite(angle):
                 raise ValueError(f"gates[{index}] '{gate}' requires a finite numeric angle.")
-            lines.append(f"{gate}({float(angle)}) {target}")
+            numeric_angle = float(angle)
+            quil_lines.append(f"{gate}({numeric_angle}) {target}")
+            qasm_lines.append(f"{gate.lower()}({numeric_angle}) q[{target}];")
+            ionq_gates.append({"gate": gate.lower(), "rotation": numeric_angle, "target": target})
         else:
             raise ValueError(f"gates[{index}] uses unsupported gate '{gate}'.")
 
-    lines.extend(f"MEASURE {qubit} ro[{qubit}]" for qubit in range(qubit_count))
-    return CircuitProgram("\n".join(lines) + "\n", qubit_count), shots
+    quil_lines.extend(f"MEASURE {qubit} ro[{qubit}]" for qubit in range(qubit_count))
+    qasm_lines.extend(f"measure q[{qubit}] -> ro[{qubit}];" for qubit in range(qubit_count))
+    return CircuitProgram(
+        "\n".join(quil_lines) + "\n",
+        {"qubits": qubit_count, "circuit": ionq_gates},
+        "\n".join(qasm_lines) + "\n",
+        qubit_count,
+    ), shots
 
 
 def _qubit_index(instruction: dict, field: str, qubit_count: int, gate_index: int) -> int:
@@ -104,6 +147,63 @@ def _normalize_readout(readout: list, qubit_count: int) -> dict[str, int]:
     return counts
 
 
+def _normalize_ionq_results(results: dict, qubit_count: int, requested_shots: int) -> dict[str, int]:
+    histogram = results.get("histogram") if isinstance(results, dict) else None
+    if not isinstance(histogram, dict) or not histogram:
+        raise RuntimeError("Azure Quantum returned no IonQ measurement histogram.")
+
+    weighted_counts: dict[str, float] = {}
+    for outcome, value in histogram.items():
+        try:
+            outcome_index = int(outcome)
+        except (TypeError, ValueError) as error:
+            raise RuntimeError("Azure Quantum returned an invalid IonQ histogram outcome.") from error
+        if not 0 <= outcome_index < 2 ** qubit_count:
+            raise RuntimeError("Azure Quantum returned an IonQ outcome outside the circuit width.")
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+            raise RuntimeError("Azure Quantum returned an invalid IonQ histogram weight.")
+        state = format(outcome_index, f"0{qubit_count}b")[::-1]
+        weighted_counts[state] = weighted_counts.get(state, 0.0) + float(value)
+
+    total_weight = sum(weighted_counts.values())
+    if total_weight <= 0:
+        raise RuntimeError("Azure Quantum returned an empty IonQ measurement histogram.")
+    if total_weight <= 1.0:
+        weighted_counts = {state: weight * requested_shots for state, weight in weighted_counts.items()}
+        total_weight = float(requested_shots)
+
+    target_shots = int(math.floor(total_weight + 0.5))
+    counts = {state: int(math.floor(weight)) for state, weight in weighted_counts.items()}
+    remaining = target_shots - sum(counts.values())
+    remainder_order = sorted(
+        weighted_counts,
+        key=lambda state: (weighted_counts[state] - counts[state], state),
+        reverse=True,
+    )
+    for state in remainder_order[:remaining]:
+        counts[state] += 1
+    counts = {state: count for state, count in counts.items() if count > 0}
+    if not counts:
+        raise RuntimeError("Azure Quantum returned no IonQ measurement counts.")
+    return counts
+
+
+def _normalize_quantinuum_results(results: dict, qubit_count: int) -> dict[str, int]:
+    readouts = results.get("ro") if isinstance(results, dict) else None
+    if isinstance(readouts, str):
+        readouts = [readouts]
+    if not isinstance(readouts, list) or not readouts:
+        raise RuntimeError("Azure Quantum returned no Quantinuum readout register.")
+
+    counts: dict[str, int] = {}
+    for readout in readouts:
+        if not isinstance(readout, str) or len(readout) != qubit_count or any(bit not in "01" for bit in readout):
+            raise RuntimeError("Azure Quantum returned an invalid Quantinuum measurement bit string.")
+        state = readout[::-1]
+        counts[state] = counts.get(state, 0) + 1
+    return counts
+
+
 def execute(payload: dict, circuit: CircuitProgram, requested_shots: int) -> dict:
     workspace_resource_id = os.environ.get("AZURE_QUANTUM_WORKSPACE_RESOURCE_ID")
     target_id = os.environ.get("AZURE_QUANTUM_TARGET_ID")
@@ -113,8 +213,17 @@ def execute(payload: dict, circuit: CircuitProgram, requested_shots: int) -> dic
             "on the Azure Quantum backend Function App."
         )
 
-    if target_id != "rigetti.sim.qvm" and not target_id.startswith("rigetti.qpu."):
-        raise RuntimeError("This backend supports Rigetti targets only; configure rigetti.sim.qvm or a Rigetti QPU.")
+    provider = target_id.split(".", 1)[0].lower()
+    target_types = {
+        "rigetti": Rigetti,
+        "ionq": IonQ,
+        "quantinuum": Quantinuum,
+    }
+    if provider not in target_types:
+        raise RuntimeError(
+            f"Unsupported Azure Quantum provider '{provider}'. This backend supports Rigetti, IonQ, and "
+            "Quantinuum gate-circuit targets; pulse-based providers such as Pasqal are not supported."
+        )
 
     timeout = int(os.environ.get("AZURE_QUANTUM_JOB_TIMEOUT_SECONDS", "180"))
     if not 1 <= timeout <= 180:
@@ -124,16 +233,34 @@ def execute(payload: dict, circuit: CircuitProgram, requested_shots: int) -> dic
         resource_id=workspace_resource_id,
         credential=DefaultAzureCredential(),
     )
-    target = Rigetti(workspace=workspace, name=target_id)
-    job = target.submit(
-        input_data=circuit.quil,
-        name="logic-app-quantum-circuit",
-        shots=requested_shots,
-    )
+    target = target_types[provider](workspace=workspace, name=target_id)
+    if provider == "rigetti":
+        job = target.submit(
+            input_data=circuit.quil,
+            name="logic-app-quantum-circuit",
+            shots=requested_shots,
+        )
+    elif provider == "ionq":
+        job = target.submit(
+            circuit=circuit.ionq_circuit,
+            name="logic-app-quantum-circuit",
+            shots=requested_shots,
+        )
+    else:
+        job = target.submit(
+            circuit=circuit.openqasm,
+            name="logic-app-quantum-circuit",
+            shots=requested_shots,
+        )
     job_id = job.id
     logging.info("Azure Quantum job submitted: %s", job_id)
     job.wait_until_completed(timeout_secs=timeout, print_progress=False)
-    counts = _normalize_readout(Result(job)["ro"], circuit.num_qubits)
+    if provider == "rigetti":
+        counts = _normalize_readout(Result(job)["ro"], circuit.num_qubits)
+    elif provider == "ionq":
+        counts = _normalize_ionq_results(job.get_results(), circuit.num_qubits, requested_shots)
+    else:
+        counts = _normalize_quantinuum_results(job.get_results(), circuit.num_qubits)
     completed_shots = sum(counts.values())
 
     return {

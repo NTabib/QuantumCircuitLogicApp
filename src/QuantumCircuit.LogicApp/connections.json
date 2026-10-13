@@ -25,7 +25,7 @@
       "serviceProvider": {
         "id": "/serviceProviders/azureQuantumCircuit"
       },
-      "displayName": "Azure Quantum (Rigetti backend)"
+      "displayName": "Azure Quantum (multi-provider backend)"
     }
   },
   "managedApiConnections": {}

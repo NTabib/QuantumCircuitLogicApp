@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Deploys the separate Python Rigetti backend and grants it access to an Azure Quantum workspace.
+  Deploys the separate Python multi-provider backend and grants it access to an Azure Quantum workspace.
 
 .EXAMPLE
   .\Deploy-AzureQuantumBackend.ps1 -ResourceGroup rg-quantum -LogicAppName qcirc-la `
@@ -16,7 +16,7 @@ param(
 	[Parameter(Mandatory = $true)] [string] $StorageAccountName,
 	[Parameter(Mandatory = $true)] [string] $Location,
 	[Parameter(Mandatory = $true)] [string] $WorkspaceResourceId,
-	# [ValidatePattern('^rigetti\.(sim\.qvm|qpu\.[a-zA-Z0-9-]+)$')]
+	[ValidatePattern('^(rigetti\.(sim\.qvm|qpu\.[a-zA-Z0-9-]+)|ionq\.(simulator|qpu\.[a-zA-Z0-9-]+)|quantinuum\.(sim|qpu)\.[a-zA-Z0-9-]+)$')]
 	[string] $TargetId = 'rigetti.sim.qvm'
 )
 

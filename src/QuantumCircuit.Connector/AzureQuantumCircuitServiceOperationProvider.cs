@@ -191,7 +191,7 @@ namespace QuantumCircuit.Connector
             Properties = new ServiceOperationApiProperties
             {
                 BrandColor = BrandColor,
-                Description = "Submits a gate-only circuit to a Rigetti target through the Azure Quantum Python backend.",
+                Description = "Submits a gate-only circuit to a supported Rigetti, IonQ, or Quantinuum target through the Azure Quantum Python backend.",
                 DisplayName = "Azure Quantum Circuit",
                 IconUri = IconUri,
                 Capabilities = new[] { ApiCapability.Actions },
@@ -226,7 +226,7 @@ namespace QuantumCircuit.Connector
             {
                 Api = BuildServiceOperationApi().GetFlattenedApi(),
                 Summary = "Run a circuit on Azure Quantum",
-                Description = "Converts supported unitary gate instructions to Quil, submits it to the configured Azure Quantum Rigetti target, waits for completion, and returns measured counts.",
+                Description = "Converts supported unitary gate instructions to the configured target provider's native circuit format, waits for the Azure Quantum job, and returns measured counts.",
                 Visibility = Visibility.Important,
                 OperationType = OperationType.ServiceProvider,
                 BrandColor = BrandColor,
@@ -314,7 +314,7 @@ namespace QuantumCircuit.Connector
                             Title = "Azure Quantum job result",
                             Properties = new OrdinalDictionary<SwaggerSchema>
                             {
-                                { "backend", StringSchema("Backend", "Azure Quantum native Rigetti adapter.") },
+                                { "backend", StringSchema("Backend", "Azure Quantum multi-provider native circuit adapter.") },
                                 { "provider", StringSchema("Provider", "Azure Quantum provider identifier.") },
                                 { "targetId", StringSchema("Target", "Azure Quantum provider target ID.") },
                                 { "jobId", StringSchema("Job ID", "Submitted Azure Quantum job.") },

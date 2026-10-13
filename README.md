@@ -435,9 +435,9 @@ python -m unittest discover -s .\tests\AzureQuantumBackendTests -v
 The existing `quantumCircuit/runCircuit` service provider remains the local Q# `FullState`
 simulator. A separate `azureQuantumCircuit/runCircuit` operation and `AzureQuantumBellWorkflow`
 use the same visual builder, then POST the completed circuit to a separate Python Azure Functions
-backend. That backend converts the supported instructions to a native Quil program, submits it through
-Microsoft's `azure.quantum.target.rigetti` adapter to the configured Azure Quantum Rigetti target, waits for
-the job, and returns the target, job ID, measured counts, probabilities, and actual shot count.
+backend. That backend selects a native circuit adapter from the configured target ID: Quil for Rigetti,
+IonQ circuit JSON for IonQ, or OpenQASM 2.0 for Quantinuum. It waits for the Azure Quantum job and
+returns the target, job ID, measured counts, probabilities, and shot count.
 The new path does not replace or change any existing simulation workflow.
 
 This deliberately runs the Azure Quantum submission service in a separate **Linux Python 3.11
@@ -457,10 +457,16 @@ Function App's managed identity. The deploy script currently assigns **Quantum W
 Contributor**; check the workspace's current Azure Quantum RBAC guidance and assign the equivalent
 least-privilege job submit/read role if that role name is unavailable in your tenant. Select a target
 available in that workspace and compatible with the circuit. This deployment defaults to Rigetti's
-free cloud simulator, `rigetti.sim.qvm`, which accepts Quil programs. The Rigetti hardware target is
-`rigetti.qpu.cepheus-1-108q`; verify workspace/provider access and pricing before selecting it. See
-the [Rigetti target documentation](https://learn.microsoft.com/azure/quantum/provider-rigetti).
-This backend now supports Rigetti targets only. Other providers require a separate compatible adapter.
+free cloud simulator, `rigetti.sim.qvm`. Supported targets are selected solely by
+`AZURE_QUANTUM_TARGET_ID`: `rigetti.sim.qvm` or `rigetti.qpu.*` (native Quil),
+`ionq.simulator` or `ionq.qpu.*` (IonQ circuit JSON), and `quantinuum.sim.*` or
+`quantinuum.qpu.*` (OpenQASM 2.0). The SDK adapters use Azure's `rigetti.quil.v1`,
+`ionq.circuit.v1`, and `honeywell.openqasm.v1` formats respectively. See the
+[Rigetti](https://learn.microsoft.com/azure/quantum/provider-rigetti),
+[IonQ](https://learn.microsoft.com/azure/quantum/provider-ionq), and
+[Quantinuum](https://learn.microsoft.com/azure/quantum/provider-quantinuum) target documentation
+to confirm the target IDs currently enabled in your workspace. Providers that require pulse/analog
+programs, including Pasqal, are not supported by this gate-circuit backend.
 
 To create and configure the separate backend and its managed identity, run
 `deploy\Deploy-AzureQuantumBackend.ps1` after the Logic App, storage account, and Azure Quantum
@@ -477,8 +483,10 @@ workspace exist:
   -TargetId rigetti.sim.qvm
 ```
 
-The script grants the backend Function App identity the workspace data-contributor role, publishes
-the Python app, and sets `AZURE_QUANTUM_BACKEND_URL` plus the function-scoped key as Logic App host
+Set `-TargetId` to an enabled supported target when selecting IonQ or Quantinuum. For an existing
+Function App, changing `AZURE_QUANTUM_TARGET_ID` is sufficient; the backend code does not need to be
+republished. The script grants the backend Function App identity the workspace data-contributor role,
+publishes the Python app, and sets `AZURE_QUANTUM_BACKEND_URL` plus the function-scoped key as Logic App host
 settings (not in source control). For production, replace the key setting with a Key Vault reference.
 The function key protects the backend HTTP endpoint; the backend identity, not the Logic App, accesses
 the Quantum workspace. `connections.json` registers the new service provider without embedding
@@ -496,8 +504,11 @@ provider must already be provisioned and the configured target must be enabled i
 The hardware path accepts computational-basis initial states, supported unitary gates (`H`, `X`,
 `Y`, `Z`, `S`, `S_DAG`, `T`, `T_DAG`, `CNOT`, `CZ`, `SWAP`, `TOFFOLI`, `RX`, `RY`, `RZ`) and
 terminal measurements. It explicitly rejects mid-circuit `MEASURE`, `RESET`, `IF`, and reusable
-`CALL`; use the simulator path for those workflows. Target-specific gate/profile limits still apply.
-The sample workflow submits H(0), CNOT(0,1), so its ideal counts are split between `00` and `11`;
+`CALL`; use the simulator path for those workflows. The adapters map these gate names to Quil, IonQ's
+QIS circuit schema, and OpenQASM 2.0; target-specific gate/profile limits and workspace offerings
+still apply. IonQ simulator histograms are exact distributions rather than sampled shots; the backend
+converts their weights to an integer histogram summing to the requested shot count. The sample
+workflow submits H(0), CNOT(0,1), so its ideal counts are split between `00` and `11`;
 real QPU noise and finite shots affect the observed distribution. The backend waits synchronously
 for up to 180 seconds, while the connector HTTP timeout is 210 seconds. A remote job may continue
 after a synchronous timeout; automatic workflow retry is disabled to avoid accidental duplicate
@@ -506,9 +517,9 @@ QPU submissions may incur provider charges.
 
 If publishing shows an empty `Functions in ...` list followed by `Error retrieving function keys`,
 the Python host may have failed to index `function_app.py`. Check the backend's Application Insights
-exceptions or Log stream for the underlying import error. The backend imports `azure.quantum` and
-`azure.quantum.target.rigetti`, installed through the core `azure-quantum` package in
-`requirements.txt`; `qdk.azure` is not the adapter namespace. Native Quil submission avoids the
+exceptions or Log stream for the underlying import error. The backend imports `azure.quantum` and its
+core Rigetti, IonQ, and Quantinuum target adapters, installed through the `azure-quantum` package in
+`requirements.txt`; `qdk.azure` is not the adapter namespace. Native submissions avoid the
 QDK/Qiskit extra's Linux wheels, which require glibc 2.35 and cannot be installed by the
 Debian Bullseye Oryx builder. No QDK or Qiskit runtime is required by this backend.
 Republish from `src\QuantumCircuit.AzureQuantumBackend` with
@@ -578,7 +589,8 @@ secret store (it contains a SAS signature).
 
 * **QDK version**: the local in-process .NET simulator uses the *classic* QDK
   (`Microsoft.Quantum.Sdk` 0.28, last release). The separate, optional Azure Quantum path uses the
-  Python Azure Quantum SDK with Rigetti's native Quil adapter; it does not replace the simulator or load the classic SDK in its
+  Python Azure Quantum SDK with native Quil, IonQ circuit JSON, or Quantinuum OpenQASM adapters; it
+  does not replace the simulator or load the classic SDK in its
   Function App. Actual QPU execution depends on the selected workspace target, provider availability,
   circuit compatibility, and provider billing.
 * The full-state simulator is limited to 20 qubits for `runCircuit` (state-vector memory grows

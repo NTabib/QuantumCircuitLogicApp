@@ -21,6 +21,19 @@ class FakeJob:
         if timeout_secs != 30 or print_progress:
             raise AssertionError("Incorrect job wait settings.")
 
+    def get_results(self):
+        return {"histogram": {"0": 12, "1": 8}}
+
+
+class FakeIonQJob(FakeJob):
+    def get_results(self):
+        return {"histogram": {"0": 12, "1": 8}}
+
+
+class FakeQuantinuumJob(FakeJob):
+    def get_results(self):
+        return {"ro": ["00"] * 12 + ["11"] * 8}
+
 
 class FakeResult:
     def __init__(self, job): pass
@@ -42,6 +55,34 @@ class FakeRigetti:
         if input_data != "DECLARE ro BIT[2]\nH 0\nMEASURE 0 ro[0]\nMEASURE 1 ro[1]\n":
             raise AssertionError("Incorrect submitted Quil program.")
         return FakeJob()
+
+
+class FakeIonQ:
+    def __init__(self, workspace, name):
+        if name != "ionq.simulator":
+            raise AssertionError("Incorrect Azure Quantum target.")
+
+    def submit(self, circuit, name, shots):
+        if shots != 20 or name != "logic-app-quantum-circuit":
+            raise AssertionError("Incorrect IonQ job settings.")
+        if circuit != {"qubits": 2, "circuit": [{"gate": "h", "target": 0}]}:
+            raise AssertionError("Incorrect submitted IonQ circuit.")
+        return FakeIonQJob()
+
+
+class FakeQuantinuum:
+    def __init__(self, workspace, name):
+        if name != "quantinuum.sim.h2-1sc":
+            raise AssertionError("Incorrect Azure Quantum target.")
+
+    def submit(self, circuit, name, shots):
+        expected = (
+            'OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[2];\ncreg ro[2];\n'
+            "h q[0];\nmeasure q[0] -> ro[0];\nmeasure q[1] -> ro[1];\n"
+        )
+        if shots != 20 or name != "logic-app-quantum-circuit" or circuit != expected:
+            raise AssertionError("Incorrect submitted Quantinuum OpenQASM program.")
+        return FakeQuantinuumJob()
 
 
 class FakeWorkspace:
@@ -83,6 +124,10 @@ def install_azure_stubs():
     rigetti = types.ModuleType("azure.quantum.target.rigetti")
     rigetti.Rigetti = FakeRigetti
     rigetti.Result = FakeResult
+    ionq = types.ModuleType("azure.quantum.target.ionq")
+    ionq.IonQ = FakeIonQ
+    quantinuum = types.ModuleType("azure.quantum.target.quantinuum")
+    quantinuum.Quantinuum = FakeQuantinuum
 
     sys.modules.update({
         "azure": azure,
@@ -91,6 +136,8 @@ def install_azure_stubs():
         "azure.quantum": quantum,
         "azure.quantum.target": target,
         "azure.quantum.target.rigetti": rigetti,
+        "azure.quantum.target.ionq": ionq,
+        "azure.quantum.target.quantinuum": quantinuum,
     })
 
 
@@ -119,6 +166,19 @@ class AzureQuantumBackendTests(unittest.TestCase):
             "DECLARE ro BIT[2]\nX 0\nH 1\nCNOT 0 1\n"
             "MEASURE 0 ro[0]\nMEASURE 1 ro[1]\n"
         ))
+        self.assertEqual(circuit.ionq_circuit, {
+            "qubits": 2,
+            "circuit": [
+                {"gate": "x", "target": 0},
+                {"gate": "h", "target": 1},
+                {"gate": "cnot", "control": 0, "target": 1},
+            ],
+        })
+        self.assertEqual(circuit.openqasm, (
+            'OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[2];\ncreg ro[2];\n'
+            "x q[0];\nh q[1];\ncx q[0],q[1];\n"
+            "measure q[0] -> ro[0];\nmeasure q[1] -> ro[1];\n"
+        ))
 
     def test_translates_every_supported_gate_to_quil(self):
         gates = [{"gate": gate, "target": 2} for gate in
@@ -135,6 +195,30 @@ class AzureQuantumBackendTests(unittest.TestCase):
             "CZ 0 2", "SWAP 0 2", "CCNOT 0 1 2", "CCNOT 0 1 2",
             "RX(-0.5) 2", "RY(-0.5) 2", "RZ(-0.5) 2",
         ])
+        self.assertEqual(circuit.ionq_circuit["circuit"][5:10], [
+            {"gate": "si", "target": 2},
+            {"gate": "si", "target": 2},
+            {"gate": "t", "target": 2},
+            {"gate": "ti", "target": 2},
+            {"gate": "ti", "target": 2},
+        ])
+        self.assertEqual(circuit.ionq_circuit["circuit"][10:16], [
+            {"gate": "cnot", "control": 0, "target": 2},
+            {"gate": "cnot", "control": 0, "target": 2},
+            {"gate": "z", "control": 0, "target": 2},
+            {"gate": "swap", "targets": [0, 2]},
+            {"gate": "not", "controls": [0, 1], "target": 2},
+            {"gate": "not", "controls": [0, 1], "target": 2},
+        ])
+        self.assertEqual(circuit.ionq_circuit["circuit"][16:], [
+            {"gate": "rx", "rotation": -0.5, "target": 2},
+            {"gate": "ry", "rotation": -0.5, "target": 2},
+            {"gate": "rz", "rotation": -0.5, "target": 2},
+        ])
+        self.assertIn("ccx q[0],q[1],q[2];", circuit.openqasm)
+        self.assertIn("cz q[0],q[2];", circuit.openqasm)
+        self.assertIn("swap q[0],q[2];", circuit.openqasm)
+        self.assertIn("rx(-0.5) q[2];", circuit.openqasm)
 
     def test_rejects_nonunitary_control_flow(self):
         with self.assertRaisesRegex(ValueError, "unsupported by this Azure Quantum circuit path"):
@@ -153,18 +237,34 @@ class AzureQuantumBackendTests(unittest.TestCase):
         counts = backend._normalize_readout([[1, 0]] * 3 + [[0, 1]] * 2, 2)
         self.assertEqual(counts, {"10": 3, "01": 2})
 
+    def test_normalizes_ionq_histogram_and_little_endian_outcomes(self):
+        counts = backend._normalize_ionq_results({"histogram": {"0": 0.25, "1": 0.75}}, 2, 20)
+        self.assertEqual(counts, {"00": 5, "10": 15})
+
+    def test_normalizes_quantinuum_classical_register_order(self):
+        counts = backend._normalize_quantinuum_results({"ro": ["10", "01", "10"]}, 2)
+        self.assertEqual(counts, {"01": 2, "10": 1})
+
+    def test_rejects_malformed_provider_results(self):
+        with self.assertRaisesRegex(RuntimeError, "no IonQ measurement histogram"):
+            backend._normalize_ionq_results({}, 2, 20)
+        with self.assertRaisesRegex(RuntimeError, "outside the circuit width"):
+            backend._normalize_ionq_results({"histogram": {"4": 1}}, 2, 20)
+        with self.assertRaisesRegex(RuntimeError, "invalid Quantinuum measurement"):
+            backend._normalize_quantinuum_results({"ro": ["0x"]}, 2)
+
     def test_rejects_invalid_or_empty_native_readout(self):
         for readout in ([], [[0]], [[0, 2]], [[0, 0.5]]):
             with self.subTest(readout=readout), self.assertRaises(RuntimeError):
                 backend._normalize_readout(readout, 2)
 
-    def test_rejects_non_rigetti_target_before_submission(self):
+    def test_rejects_unsupported_provider_before_submission(self):
         payload = {"initialState": "0", "gates": []}
         circuit, shots = backend.build_circuit(payload)
         with patch.dict("os.environ", {
             "AZURE_QUANTUM_WORKSPACE_RESOURCE_ID": "/subscriptions/test/workspaces/demo",
-            "AZURE_QUANTUM_TARGET_ID": "ionq.simulator",
-        }), self.assertRaisesRegex(RuntimeError, "Rigetti targets only"):
+            "AZURE_QUANTUM_TARGET_ID": "pasqal.qpu.fresnel-can1",
+        }), self.assertRaisesRegex(RuntimeError, "supports Rigetti, IonQ, and Quantinuum"):
             backend.execute(payload, circuit, shots)
 
     def test_executes_via_configured_azure_quantum_target(self):
@@ -186,6 +286,42 @@ class AzureQuantumBackendTests(unittest.TestCase):
         self.assertEqual(result["counts"], {"00": 12, "11": 8})
         self.assertEqual(result["shots"], 20)
         self.assertAlmostEqual(result["probabilities"]["00"], 0.6)
+
+    def test_executes_via_configured_ionq_target(self):
+        payload = {
+            "initialState": "00",
+            "shots": 20,
+            "gates": [{"gate": "H", "target": 0}],
+        }
+        circuit, shots = backend.build_circuit(payload)
+        with patch.dict("os.environ", {
+            "AZURE_QUANTUM_WORKSPACE_RESOURCE_ID": "/subscriptions/test/workspaces/demo",
+            "AZURE_QUANTUM_TARGET_ID": "ionq.simulator",
+            "AZURE_QUANTUM_JOB_TIMEOUT_SECONDS": "30",
+        }):
+            result = backend.execute(payload, circuit, shots)
+
+        self.assertEqual(result["provider"], "ionq")
+        self.assertEqual(result["counts"], {"00": 12, "10": 8})
+        self.assertEqual(result["shots"], 20)
+
+    def test_executes_via_configured_quantinuum_target(self):
+        payload = {
+            "initialState": "00",
+            "shots": 20,
+            "gates": [{"gate": "H", "target": 0}],
+        }
+        circuit, shots = backend.build_circuit(payload)
+        with patch.dict("os.environ", {
+            "AZURE_QUANTUM_WORKSPACE_RESOURCE_ID": "/subscriptions/test/workspaces/demo",
+            "AZURE_QUANTUM_TARGET_ID": "quantinuum.sim.h2-1sc",
+            "AZURE_QUANTUM_JOB_TIMEOUT_SECONDS": "30",
+        }):
+            result = backend.execute(payload, circuit, shots)
+
+        self.assertEqual(result["provider"], "quantinuum")
+        self.assertEqual(result["counts"], {"00": 12, "11": 8})
+        self.assertEqual(result["shots"], 20)
 
 
 if __name__ == "__main__":
