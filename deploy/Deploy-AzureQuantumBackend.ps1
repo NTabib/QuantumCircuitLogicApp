@@ -112,7 +112,9 @@ Invoke-Checked {
 } 'Synchronizing the deployed backend function triggers'
 
 $backendUrl = "https://$FunctionAppName.azurewebsites.net/api/run-quantum-circuit"
+$schedulingBackendUrl = "https://$FunctionAppName.azurewebsites.net/api/run-hybrid-schedule"
 $functionKey = $null
+$schedulingFunctionKey = $null
 for ($attempt = 1; $attempt -le 12; $attempt++) {
 	$functionNames = az functionapp function list `
 		--resource-group $ResourceGroup `
@@ -120,6 +122,8 @@ for ($attempt = 1; $attempt -le 12; $attempt++) {
 		--query "[].name" `
 		--output tsv
 	if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the published backend functions.' }
+	$functionKeyReady = $false
+	$schedulingFunctionKeyReady = $false
 
 	if (@($functionNames | Where-Object { ($_ -split '/')[-1] -eq 'run_quantum_circuit' }).Count -gt 0) {
 		$functionKey = az functionapp function keys list `
@@ -128,15 +132,33 @@ for ($attempt = 1; $attempt -le 12; $attempt++) {
 			--function-name run_quantum_circuit `
 			--query default `
 			--output tsv
-		if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($functionKey)) { break }
-		$functionKey = $null
+		$functionKeyReady = $LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($functionKey)
 	}
 
-	Write-Warning "Waiting for run_quantum_circuit discovery and keys ($attempt/12)."
+	if (@($functionNames | Where-Object { ($_ -split '/')[-1] -eq 'run_hybrid_schedule' }).Count -gt 0) {
+		$schedulingFunctionKey = az functionapp function keys list `
+			--resource-group $ResourceGroup `
+			--name $FunctionAppName `
+			--function-name run_hybrid_schedule `
+			--query default `
+			--output tsv
+		$schedulingFunctionKeyReady = $LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($schedulingFunctionKey)
+	}
+
+	if ($functionKeyReady -and $schedulingFunctionKeyReady) {
+		break
+	}
+	$functionKey = $null
+	$schedulingFunctionKey = $null
+
+	Write-Warning "Waiting for run_quantum_circuit and run_hybrid_schedule discovery and keys ($attempt/12)."
 	if ($attempt -lt 12) { Start-Sleep -Seconds 10 }
 }
 if ([string]::IsNullOrWhiteSpace($functionKey)) {
-	throw 'run_quantum_circuit was not ready after publishing. Check Function App Log stream or Application Insights for Python import/indexing errors and the remote build log for requirements.txt installation failures. The Logic App endpoint was not configured.'
+	throw 'run_quantum_circuit was not ready after publishing. Check Function App Log stream or Application Insights for Python import/indexing errors and the remote build log for requirements.txt installation failures. The Logic App endpoints were not configured.'
+}
+if ([string]::IsNullOrWhiteSpace($schedulingFunctionKey)) {
+	throw 'run_hybrid_schedule was not ready after publishing. Check Function App Log stream or Application Insights for Python import/indexing errors and the remote build log for requirements.txt installation failures. The Logic App endpoints were not configured.'
 }
 
 Invoke-Checked {
@@ -146,10 +168,14 @@ Invoke-Checked {
 		--settings `
 			"AZURE_QUANTUM_BACKEND_URL=$backendUrl" `
 			"AZURE_QUANTUM_BACKEND_FUNCTION_KEY=$functionKey" `
+			"AZURE_QUANTUM_SCHEDULING_BACKEND_URL=$schedulingBackendUrl" `
+			"AZURE_QUANTUM_SCHEDULING_FUNCTION_KEY=$schedulingFunctionKey" `
 		--output none
-} 'Configuring the secured backend endpoint on the Logic App'
+} 'Configuring the secured circuit and scheduling backend endpoints on the Logic App'
 
 Write-Host ''
 Write-Host "Backend endpoint: $backendUrl"
+Write-Host "Scheduling endpoint: $schedulingBackendUrl"
 Write-Host "Function: run_quantum_circuit"
+Write-Host "Function: run_hybrid_schedule"
 Write-Host 'The function-scoped key was configured as a Logic App app setting. For production, use a Key Vault reference.'

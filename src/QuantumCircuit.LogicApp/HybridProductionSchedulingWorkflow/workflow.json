@@ -1,0 +1,121 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "triggers": {
+      "When_a_planning_cycle_is_received": {
+        "type": "Request",
+        "kind": "Http",
+        "inputs": {
+          "method": "POST",
+          "schema": {
+            "type": "object",
+            "required": [ "planningCycleId", "slots", "jobs" ],
+            "properties": {
+              "planningCycleId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "slots": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "items": { "type": "string" }
+              },
+              "jobs": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "items": {
+                  "type": "object",
+                  "required": [ "id", "slotCosts" ],
+                  "properties": {
+                    "id": { "type": "string" },
+                    "slotCosts": {
+                      "type": "array",
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "items": { "type": "number", "minimum": 0 }
+                    }
+                  }
+                }
+              },
+              "shots": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000,
+                "default": 100
+              },
+              "qaoa": {
+                "type": "object",
+                "properties": {
+                  "gamma": { "type": "number" },
+                  "beta": { "type": "number" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "Run_hybrid_scheduler": {
+        "type": "Http",
+        "runAfter": {},
+        "retryPolicy": {
+          "type": "none"
+        },
+        "inputs": {
+          "method": "POST",
+          "uri": "@appsetting('AZURE_QUANTUM_SCHEDULING_BACKEND_URL')",
+          "headers": {
+            "Content-Type": "application/json",
+            "x-functions-key": "@appsetting('AZURE_QUANTUM_SCHEDULING_FUNCTION_KEY')"
+          },
+          "body": "@triggerBody()"
+        }
+      },
+      "Success_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": {
+          "Run_hybrid_scheduler": [ "Succeeded" ]
+        },
+        "inputs": {
+          "statusCode": 200,
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "body": {
+            "workflowRunId": "@workflow()?['run']?['name']",
+            "planningCycleId": "@triggerBody()?['planningCycleId']",
+            "approvalRequired": true,
+            "result": "@body('Run_hybrid_scheduler')",
+            "approvalInstructions": "After planner approval, POST planningCycleId, decision, and the selectedSchedule to ApplyApprovedProductionScheduleWorkflow."
+          }
+        }
+      },
+      "Failure_response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": {
+          "Run_hybrid_scheduler": [ "Failed", "TimedOut" ]
+        },
+        "inputs": {
+          "statusCode": 502,
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "body": {
+            "planningCycleId": "@triggerBody()?['planningCycleId']",
+            "error": "The scheduling backend did not return a candidate comparison.",
+            "details": "@result('Run_hybrid_scheduler')"
+          }
+        }
+      }
+    },
+    "outputs": {}
+  },
+  "kind": "Stateful"
+}

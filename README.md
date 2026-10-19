@@ -26,7 +26,9 @@ QuantumCircuitLogicApp/
 │     ├─ Lesson*Workflow/workflow.json     # beginner gate lessons with explanations
 │     ├─ ReusableOperationWorkflow/workflow.json # typed subroutines and Boolean results
 │     ├─ QuantumCircuitWorkflow/workflow.json
-│     └─ VisualQuantumCircuitWorkflow/workflow.json # visual gate steps -> executor
+│     ├─ VisualQuantumCircuitWorkflow/workflow.json # visual gate steps -> executor
+│     ├─ HybridProductionSchedulingWorkflow/workflow.json # greedy baseline vs QAOA pilot
+│     └─ ApplyApprovedProductionScheduleWorkflow/workflow.json # planner decision -> MES API
 └─ deploy/
    ├─ main.bicep
    └─ deploy.ps1                       # provision + build + zip deploy + smoke tests
@@ -525,8 +527,59 @@ Debian Bullseye Oryx builder. No QDK or Qiskit runtime is required by this backe
 Republish from `src\QuantumCircuit.AzureQuantumBackend` with
 `func azure functionapp publish <backend-function-app-name> --python --build remote`, or rerun
 `deploy\Deploy-AzureQuantumBackend.ps1` with the same parameters to also configure the Logic App key.
-The deployment script waits for discovery of `run_quantum_circuit` and its key before configuring
-the Logic App; it fails with indexing guidance if the function remains unavailable.
+The deployment script waits for discovery of both `run_quantum_circuit` and `run_hybrid_schedule`,
+including their function keys, before configuring the Logic App; it fails with indexing guidance if
+either function remains unavailable.
+
+## Hybrid production scheduling pilot
+
+`HybridProductionSchedulingWorkflow` is a deliberately tiny end-to-end pilot, not a production
+scheduler. An ERP/MES planning event (or test client) POSTs a normalized two-job/two-slot cost model.
+The Logic App sends it to the Python `run_hybrid_schedule` Function, which builds a deterministic
+classical greedy baseline and a one-layer, four-qubit QAOA assignment circuit. That circuit is sent
+through the configured Rigetti, IonQ, or Quantinuum gate backend. The Function independently rejects
+invalid assignments and selects the QAOA result only when a sampled schedule is feasible and has a
+lower cost than the baseline; on an unavailable/failed quantum job it returns the classical schedule
+and an explicit quantum status/error. It never retries a quantum submission automatically.
+
+The request contract is:
+
+```json
+{
+  "planningCycleId": "cycle-1",
+  "slots": ["shift-1", "shift-2"],
+  "jobs": [
+    { "id": "order-A", "slotCosts": [1, 2] },
+    { "id": "order-B", "slotCosts": [1, 100] }
+  ],
+  "shots": 100,
+  "qaoa": { "gamma": 0.7, "beta": 0.4 }
+}
+```
+
+`slotCosts` must contain one finite, non-negative score per slot, in the same order as `slots`.
+These are objective units supplied by the ERP/MES adapter; the sample values are not dollars. The
+classical baseline greedily assigns each job to its least-cost remaining slot. QAOA uses a one-hot
+assignment encoding with penalty terms, fixed/default angles, and four qubits; measurements that
+violate the assignment constraints are discarded. The output contains both candidates, the measured
+Azure Quantum job ID when available, the chosen schedule, objective improvement, and
+`approval.status = Pending`.
+
+An approval system or planner reviews that result and POSTs `planningCycleId`, `decision`
+(`Approved` or `Rejected`), and the selected schedule to
+`ApplyApprovedProductionScheduleWorkflow`. On approval, that workflow POSTs the schedule to
+`MES_SCHEDULE_WRITEBACK_URL` with `MES_SCHEDULE_WRITEBACK_KEY` and an idempotency key. Configure
+those two Logic App host settings for your MES API; its endpoint must independently validate the
+schedule and treat the cycle ID idempotently. The Request trigger callback URLs are SAS-protected and
+must be handled as secrets.
+
+The backend deployment script configures the secured `run-hybrid-schedule` URL and its separate
+function key as `AZURE_QUANTUM_SCHEDULING_BACKEND_URL` and
+`AZURE_QUANTUM_SCHEDULING_FUNCTION_KEY`. The QAOA call is synchronous and can time out while a
+hardware target is queued, so start with an enabled simulator target. This pilot models only two jobs
+and two slots; it has no precedence, machine eligibility, duration, setup, inventory, or shift-calendar
+constraints. It does not establish quantum advantage. Test the workflow and response handling offline
+with the Azure backend unit tests; no live quantum job is part of the deployment smoke tests.
 
 If Core Tools reports `Failed to retrieve remote build status`, that is not confirmation of a
 successful deployment. The deployment script uses Azure CLI ZIP deployment with `--build-remote true`

@@ -1,0 +1,143 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "triggers": {
+      "When_a_planner_decision_is_received": {
+        "type": "Request",
+        "kind": "Http",
+        "inputs": {
+          "method": "POST",
+          "schema": {
+            "type": "object",
+            "required": [ "planningCycleId", "decision", "schedule" ],
+            "properties": {
+              "planningCycleId": { "type": "string", "minLength": 1 },
+              "decision": {
+                "type": "string",
+                "enum": [ "Approved", "Rejected" ]
+              },
+              "schedule": {
+                "type": "object",
+                "required": [ "assignments", "totalCost" ],
+                "properties": {
+                  "assignments": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "items": {
+                      "type": "object",
+                      "required": [ "jobId", "slotId", "cost" ],
+                      "properties": {
+                        "jobId": { "type": "string" },
+                        "slotId": { "type": "string" },
+                        "cost": { "type": "number", "minimum": 0 }
+                      }
+                    }
+                  },
+                  "totalCost": { "type": "number", "minimum": 0 }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "Decision": {
+        "type": "If",
+        "runAfter": {},
+        "expression": {
+          "and": [
+            {
+              "equals": [
+                "@triggerBody()?['decision']",
+                "Approved"
+              ]
+            }
+          ]
+        },
+        "actions": {
+          "Write_schedule_to_MES": {
+            "type": "Http",
+            "runAfter": {},
+            "retryPolicy": {
+              "type": "none"
+            },
+            "inputs": {
+              "method": "POST",
+              "uri": "@appsetting('MES_SCHEDULE_WRITEBACK_URL')",
+              "headers": {
+                "Content-Type": "application/json",
+                "x-api-key": "@appsetting('MES_SCHEDULE_WRITEBACK_KEY')",
+                "Idempotency-Key": "@triggerBody()?['planningCycleId']"
+              },
+              "body": {
+                "planningCycleId": "@triggerBody()?['planningCycleId']",
+                "schedule": "@triggerBody()?['schedule']"
+              }
+            }
+          },
+          "Applied_response": {
+            "type": "Response",
+            "kind": "Http",
+            "runAfter": {
+              "Write_schedule_to_MES": [ "Succeeded" ]
+            },
+            "inputs": {
+              "statusCode": 200,
+              "headers": {
+                "Content-Type": "application/json"
+              },
+              "body": {
+                "planningCycleId": "@triggerBody()?['planningCycleId']",
+                "status": "Applied",
+                "mesResponse": "@body('Write_schedule_to_MES')"
+              }
+            }
+          },
+          "Writeback_failure_response": {
+            "type": "Response",
+            "kind": "Http",
+            "runAfter": {
+              "Write_schedule_to_MES": [ "Failed", "TimedOut" ]
+            },
+            "inputs": {
+              "statusCode": 502,
+              "headers": {
+                "Content-Type": "application/json"
+              },
+              "body": {
+                "planningCycleId": "@triggerBody()?['planningCycleId']",
+                "status": "WritebackFailed",
+                "details": "@result('Write_schedule_to_MES')"
+              }
+            }
+          }
+        },
+        "else": {
+          "actions": {
+            "Rejected_response": {
+              "type": "Response",
+              "kind": "Http",
+              "runAfter": {},
+              "inputs": {
+                "statusCode": 200,
+                "headers": {
+                  "Content-Type": "application/json"
+                },
+                "body": {
+                  "planningCycleId": "@triggerBody()?['planningCycleId']",
+                  "status": "Rejected",
+                  "scheduleApplied": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "outputs": {}
+  },
+  "kind": "Stateful"
+}

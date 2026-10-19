@@ -1,5 +1,6 @@
 import importlib
 import inspect
+import json
 from pathlib import Path
 import sys
 import types
@@ -12,6 +13,18 @@ class FakeHttpResponse:
         self.body = body
         self.status_code = status_code
         self.mimetype = mimetype
+
+
+class FakeRequest:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def get_json(self):
+        return self.payload
+
+
+class FakeAzureError(Exception):
+    pass
 
 
 class FakeJob:
@@ -96,7 +109,10 @@ def install_azure_stubs():
 
     class FunctionApp:
         def function_name(self, **kwargs):
-            return lambda function: function
+            def decorate(function):
+                function.function_name = kwargs["name"]
+                return function
+            return decorate
 
         def route(self, **kwargs):
             def decorate(function):
@@ -114,7 +130,12 @@ def install_azure_stubs():
     azure_functions.__path__ = []
     azure_identity = types.ModuleType("azure.identity")
     azure_identity.DefaultAzureCredential = lambda: object()
+    azure_core = types.ModuleType("azure.core")
+    azure_core.__path__ = []
+    azure_core_exceptions = types.ModuleType("azure.core.exceptions")
+    azure_core_exceptions.AzureError = FakeAzureError
     azure.functions = functions
+    azure.core = azure_core
 
     quantum = types.ModuleType("azure.quantum")
     quantum.__path__ = []
@@ -133,6 +154,8 @@ def install_azure_stubs():
         "azure": azure,
         "azure.functions": functions,
         "azure.identity": azure_identity,
+        "azure.core": azure_core,
+        "azure.core.exceptions": azure_core_exceptions,
         "azure.quantum": quantum,
         "azure.quantum.target": target,
         "azure.quantum.target.rigetti": rigetti,
@@ -150,6 +173,31 @@ class AzureQuantumBackendTests(unittest.TestCase):
     def test_http_binding_matches_handler_parameter(self):
         trigger_argument = backend.run_quantum_circuit.route_settings["trigger_arg_name"]
         self.assertIn(trigger_argument, inspect.signature(backend.run_quantum_circuit).parameters)
+        self.assertEqual(backend.run_hybrid_schedule_http.function_name, "run_hybrid_schedule")
+        scheduling_trigger = backend.run_hybrid_schedule_http.route_settings["trigger_arg_name"]
+        self.assertIn(scheduling_trigger, inspect.signature(backend.run_hybrid_schedule_http).parameters)
+
+    def test_logic_app_workflows_wire_schedule_and_approval_contracts(self):
+        root = Path(__file__).resolve().parents[2] / "src" / "QuantumCircuit.LogicApp"
+        schedule = json.loads(
+            (root / "HybridProductionSchedulingWorkflow" / "workflow.json").read_text(encoding="utf-8")
+        )["definition"]
+        solve_action = schedule["actions"]["Run_hybrid_scheduler"]
+        self.assertEqual(solve_action["type"], "Http")
+        self.assertEqual(solve_action["retryPolicy"]["type"], "none")
+        self.assertEqual(
+            solve_action["inputs"]["uri"],
+            "@appsetting('AZURE_QUANTUM_SCHEDULING_BACKEND_URL')",
+        )
+
+        approval = json.loads(
+            (root / "ApplyApprovedProductionScheduleWorkflow" / "workflow.json").read_text(encoding="utf-8")
+        )["definition"]
+        approval_trigger = approval["triggers"]["When_a_planner_decision_is_received"]
+        self.assertIn("decision", approval_trigger["inputs"]["schema"]["required"])
+        writeback = approval["actions"]["Decision"]["actions"]["Write_schedule_to_MES"]
+        self.assertEqual(writeback["retryPolicy"]["type"], "none")
+        self.assertIn("Idempotency-Key", writeback["inputs"]["headers"])
 
     def test_builds_supported_gate_circuit_and_terminal_measurement(self):
         circuit, shots = backend.build_circuit({
@@ -257,6 +305,126 @@ class AzureQuantumBackendTests(unittest.TestCase):
         for readout in ([], [[0]], [[0, 2]], [[0, 0.5]]):
             with self.subTest(readout=readout), self.assertRaises(RuntimeError):
                 backend._normalize_readout(readout, 2)
+
+    def test_builds_and_validates_two_job_qaoa_problem(self):
+        problem = backend.build_schedule_problem({
+            "planningCycleId": "cycle-1",
+            "slots": ["shift-1", "shift-2"],
+            "jobs": [
+                {"id": "order-A", "slotCosts": [1, 2]},
+                {"id": "order-B", "slotCosts": [1, 100]},
+            ],
+            "shots": 20,
+        })
+        payload = backend.build_qaoa_schedule_circuit(problem)
+        self.assertEqual(payload["initialState"], "0000")
+        self.assertEqual(len(payload["gates"]), 24)
+        self.assertLessEqual(len(payload["gates"]), backend.MAX_GATES)
+        self.assertTrue(all(gate["gate"] in {"H", "RZ", "CNOT", "RX"} for gate in payload["gates"]))
+        circuit, _ = backend.build_circuit(payload)
+        self.assertEqual(circuit.num_qubits, 4)
+        self.assertEqual(problem.shots, 20)
+
+    def test_rejects_invalid_scheduling_input(self):
+        for payload, message in (
+            ({}, "planningCycleId"),
+            ({"planningCycleId": "cycle", "slots": ["same", "same"], "jobs": []}, "slots must"),
+            ({
+                "planningCycleId": "cycle",
+                "slots": ["one", "two"],
+                "jobs": [{"id": "A", "slotCosts": [1, 2]}, {"id": "B", "slotCosts": [-1, 2]}],
+            }, "non-negative numbers"),
+        ):
+            with self.subTest(payload=payload), self.assertRaisesRegex(ValueError, message):
+                backend.build_schedule_problem(payload)
+
+    def test_qaoa_can_improve_the_greedy_schedule_and_requires_approval(self):
+        problem = backend.build_schedule_problem({
+            "planningCycleId": "cycle-1",
+            "slots": ["shift-1", "shift-2"],
+            "jobs": [
+                {"id": "order-A", "slotCosts": [1, 2]},
+                {"id": "order-B", "slotCosts": [1, 100]},
+            ],
+            "shots": 20,
+        })
+        quantum_result = {
+            "targetId": "ionq.simulator",
+            "jobId": "qaoa-job",
+            "shots": 20,
+            "counts": {"0110": 15, "1001": 5},
+        }
+        with patch.dict("os.environ", {
+            "AZURE_QUANTUM_WORKSPACE_RESOURCE_ID": "/subscriptions/test/workspaces/demo",
+            "AZURE_QUANTUM_TARGET_ID": "ionq.simulator",
+        }), patch.object(backend, "execute", return_value=quantum_result):
+            result = backend.run_hybrid_schedule(problem)
+
+        self.assertEqual(result["baseline"]["totalCost"], 101)
+        self.assertEqual(result["quantumCandidate"]["schedule"]["totalCost"], 3)
+        self.assertEqual(result["decision"], "QuantumImproved")
+        self.assertEqual(result["selectedSchedule"]["method"], "QAOA")
+        self.assertTrue(result["approval"]["required"])
+        self.assertEqual(result["approval"]["status"], "Pending")
+
+    def test_classical_fallback_is_explicit_when_quantum_is_not_configured(self):
+        problem = backend.build_schedule_problem({
+            "planningCycleId": "cycle-2",
+            "slots": ["shift-1", "shift-2"],
+            "jobs": [
+                {"id": "order-A", "slotCosts": [1, 2]},
+                {"id": "order-B", "slotCosts": [1, 100]},
+            ],
+        })
+        with patch.dict("os.environ", {}, clear=True):
+            result = backend.run_hybrid_schedule(problem)
+
+        self.assertEqual(result["quantumCandidate"]["status"], "NotConfigured")
+        self.assertIn("Configure AZURE_QUANTUM", result["quantumCandidate"]["error"])
+        self.assertEqual(result["decision"], "ClassicalFallback")
+        self.assertEqual(result["selectedSchedule"], result["baseline"])
+
+    def test_classical_fallback_surfaces_quantum_provider_failure(self):
+        problem = backend.build_schedule_problem({
+            "planningCycleId": "cycle-3",
+            "slots": ["shift-1", "shift-2"],
+            "jobs": [
+                {"id": "order-A", "slotCosts": [1, 2]},
+                {"id": "order-B", "slotCosts": [1, 100]},
+            ],
+        })
+        with patch.dict("os.environ", {
+            "AZURE_QUANTUM_WORKSPACE_RESOURCE_ID": "/subscriptions/test/workspaces/demo",
+            "AZURE_QUANTUM_TARGET_ID": "ionq.simulator",
+        }), patch.object(backend, "execute", side_effect=FakeAzureError("workspace unavailable")):
+            result = backend.run_hybrid_schedule(problem)
+
+        self.assertEqual(result["quantumCandidate"]["status"], "Failed")
+        self.assertEqual(result["quantumCandidate"]["error"], "workspace unavailable")
+        self.assertEqual(result["decision"], "ClassicalFallback")
+
+    def test_hybrid_schedule_http_endpoint_returns_validation_errors(self):
+        response = backend.run_hybrid_schedule_http(FakeRequest({"planningCycleId": ""}))
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("planningCycleId", response.body)
+
+    def test_hybrid_schedule_http_endpoint_returns_classical_plan_without_workspace(self):
+        request = FakeRequest({
+            "planningCycleId": "cycle-http",
+            "slots": ["shift-1", "shift-2"],
+            "jobs": [
+                {"id": "order-A", "slotCosts": [1, 2]},
+                {"id": "order-B", "slotCosts": [1, 100]},
+            ],
+        })
+        with patch.dict("os.environ", {}, clear=True):
+            response = backend.run_hybrid_schedule_http(request)
+
+        result = json.loads(response.body)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(result["decision"], "ClassicalFallback")
+        self.assertTrue(result["baseline"]["feasible"])
+        self.assertEqual(result["quantumCandidate"]["status"], "NotConfigured")
 
     def test_rejects_unsupported_provider_before_submission(self):
         payload = {"initialState": "0", "gates": []}
