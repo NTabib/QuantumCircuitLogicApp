@@ -21,7 +21,8 @@
                 "type": "array",
                 "minItems": 2,
                 "maxItems": 2,
-                "items": { "type": "string" }
+                "uniqueItems": true,
+                "items": { "type": "string", "minLength": 1 }
               },
               "jobs": {
                 "type": "array",
@@ -31,12 +32,12 @@
                   "type": "object",
                   "required": [ "id", "slotCosts" ],
                   "properties": {
-                    "id": { "type": "string" },
+                    "id": { "type": "string", "minLength": 1 },
                     "slotCosts": {
                       "type": "array",
                       "minItems": 2,
                       "maxItems": 2,
-                      "items": { "type": "number", "minimum": 0 }
+                      "items": { "type": "number", "minimum": 0, "maximum": 1000000000 }
                     }
                   }
                 }
@@ -50,8 +51,8 @@
               "qaoa": {
                 "type": "object",
                 "properties": {
-                  "gamma": { "type": "number" },
-                  "beta": { "type": "number" }
+                  "gamma": { "type": "number", "minimum": -3.141592653589793, "maximum": 3.141592653589793 },
+                  "beta": { "type": "number", "minimum": -3.141592653589793, "maximum": 3.141592653589793 }
                 }
               }
             }
@@ -60,27 +61,182 @@
       }
     },
     "actions": {
-      "Run_hybrid_scheduler": {
-        "type": "Http",
+      "Greedy_baseline": {
+        "type": "Compose",
         "runAfter": {},
+        "inputs": {
+          "method": "classical-greedy",
+          "assignments": [
+            {
+              "jobId": "@triggerBody()?['jobs']?[0]?['id']",
+              "slotId": "@if(lessOrEquals(triggerBody()?['jobs']?[0]?['slotCosts']?[0], triggerBody()?['jobs']?[0]?['slotCosts']?[1]), triggerBody()?['slots']?[0], triggerBody()?['slots']?[1])",
+              "cost": "@if(lessOrEquals(triggerBody()?['jobs']?[0]?['slotCosts']?[0], triggerBody()?['jobs']?[0]?['slotCosts']?[1]), triggerBody()?['jobs']?[0]?['slotCosts']?[0], triggerBody()?['jobs']?[0]?['slotCosts']?[1])"
+            },
+            {
+              "jobId": "@triggerBody()?['jobs']?[1]?['id']",
+              "slotId": "@if(lessOrEquals(triggerBody()?['jobs']?[0]?['slotCosts']?[0], triggerBody()?['jobs']?[0]?['slotCosts']?[1]), triggerBody()?['slots']?[1], triggerBody()?['slots']?[0])",
+              "cost": "@if(lessOrEquals(triggerBody()?['jobs']?[0]?['slotCosts']?[0], triggerBody()?['jobs']?[0]?['slotCosts']?[1]), triggerBody()?['jobs']?[1]?['slotCosts']?[1], triggerBody()?['jobs']?[1]?['slotCosts']?[0])"
+            }
+          ],
+          "totalCost": "@if(lessOrEquals(triggerBody()?['jobs']?[0]?['slotCosts']?[0], triggerBody()?['jobs']?[0]?['slotCosts']?[1]), add(triggerBody()?['jobs']?[0]?['slotCosts']?[0], triggerBody()?['jobs']?[1]?['slotCosts']?[1]), add(triggerBody()?['jobs']?[0]?['slotCosts']?[1], triggerBody()?['jobs']?[1]?['slotCosts']?[0]))",
+          "feasible": true
+        }
+      },
+      "QAOA_cost_scale": {
+        "type": "Compose",
+        "runAfter": {},
+        "inputs": "@if(equals(add(if(greater(triggerBody()?['jobs']?[0]?['slotCosts']?[0], triggerBody()?['jobs']?[0]?['slotCosts']?[1]), triggerBody()?['jobs']?[0]?['slotCosts']?[0], triggerBody()?['jobs']?[0]?['slotCosts']?[1]), if(greater(triggerBody()?['jobs']?[1]?['slotCosts']?[0], triggerBody()?['jobs']?[1]?['slotCosts']?[1]), triggerBody()?['jobs']?[1]?['slotCosts']?[0], triggerBody()?['jobs']?[1]?['slotCosts']?[1])), 0), 1, add(if(greater(triggerBody()?['jobs']?[0]?['slotCosts']?[0], triggerBody()?['jobs']?[0]?['slotCosts']?[1]), triggerBody()?['jobs']?[0]?['slotCosts']?[0], triggerBody()?['jobs']?[0]?['slotCosts']?[1]), if(greater(triggerBody()?['jobs']?[1]?['slotCosts']?[0], triggerBody()?['jobs']?[1]?['slotCosts']?[1]), triggerBody()?['jobs']?[1]?['slotCosts']?[0], triggerBody()?['jobs']?[1]?['slotCosts']?[1])))"
+      },
+      "Run_QAOA_candidate": {
+        "type": "ServiceProvider",
+        "runAfter": {
+          "Greedy_baseline": [ "Succeeded" ],
+          "QAOA_cost_scale": [ "Succeeded" ]
+        },
         "retryPolicy": {
           "type": "none"
         },
         "inputs": {
-          "method": "POST",
-          "uri": "@appsetting('AZURE_QUANTUM_SCHEDULING_BACKEND_URL')",
-          "headers": {
-            "Content-Type": "application/json",
-            "x-functions-key": "@appsetting('AZURE_QUANTUM_SCHEDULING_FUNCTION_KEY')"
+          "parameters": {
+            "initialState": "0000",
+            "gates": [
+              { "gate": "H", "target": 0 },
+              { "gate": "H", "target": 1 },
+              { "gate": "H", "target": 2 },
+              { "gate": "H", "target": 3 },
+              { "gate": "RZ", "target": 0, "angle": "@mul(2, mul(coalesce(triggerBody()?['qaoa']?['gamma'], 0.7), sub(1, div(triggerBody()?['jobs']?[0]?['slotCosts']?[0], mul(2, outputs('QAOA_cost_scale'))))))" },
+              { "gate": "RZ", "target": 1, "angle": "@mul(2, mul(coalesce(triggerBody()?['qaoa']?['gamma'], 0.7), sub(1, div(triggerBody()?['jobs']?[0]?['slotCosts']?[1], mul(2, outputs('QAOA_cost_scale'))))))" },
+              { "gate": "RZ", "target": 2, "angle": "@mul(2, mul(coalesce(triggerBody()?['qaoa']?['gamma'], 0.7), sub(1, div(triggerBody()?['jobs']?[1]?['slotCosts']?[0], mul(2, outputs('QAOA_cost_scale'))))))" },
+              { "gate": "RZ", "target": 3, "angle": "@mul(2, mul(coalesce(triggerBody()?['qaoa']?['gamma'], 0.7), sub(1, div(triggerBody()?['jobs']?[1]?['slotCosts']?[1], mul(2, outputs('QAOA_cost_scale'))))))" },
+              { "gate": "CNOT", "control": 0, "target": 1 },
+              { "gate": "RZ", "target": 1, "angle": "@mul(2, coalesce(triggerBody()?['qaoa']?['gamma'], 0.7))" },
+              { "gate": "CNOT", "control": 0, "target": 1 },
+              { "gate": "CNOT", "control": 0, "target": 2 },
+              { "gate": "RZ", "target": 2, "angle": "@mul(2, coalesce(triggerBody()?['qaoa']?['gamma'], 0.7))" },
+              { "gate": "CNOT", "control": 0, "target": 2 },
+              { "gate": "CNOT", "control": 1, "target": 3 },
+              { "gate": "RZ", "target": 3, "angle": "@mul(2, coalesce(triggerBody()?['qaoa']?['gamma'], 0.7))" },
+              { "gate": "CNOT", "control": 1, "target": 3 },
+              { "gate": "CNOT", "control": 2, "target": 3 },
+              { "gate": "RZ", "target": 3, "angle": "@mul(2, coalesce(triggerBody()?['qaoa']?['gamma'], 0.7))" },
+              { "gate": "CNOT", "control": 2, "target": 3 },
+              { "gate": "RX", "target": 0, "angle": "@mul(2, coalesce(triggerBody()?['qaoa']?['beta'], 0.4))" },
+              { "gate": "RX", "target": 1, "angle": "@mul(2, coalesce(triggerBody()?['qaoa']?['beta'], 0.4))" },
+              { "gate": "RX", "target": 2, "angle": "@mul(2, coalesce(triggerBody()?['qaoa']?['beta'], 0.4))" },
+              { "gate": "RX", "target": 3, "angle": "@mul(2, coalesce(triggerBody()?['qaoa']?['beta'], 0.4))" }
+            ],
+            "shots": "@coalesce(triggerBody()?['shots'], 100)"
           },
-          "body": "@triggerBody()"
+          "serviceProviderConfiguration": {
+            "connectionName": "azureQuantumCircuit",
+            "operationId": "runCircuit",
+            "serviceProviderId": "/serviceProviders/azureQuantumCircuit"
+          }
         }
+      },
+      "Select_feasible_measurement": {
+        "type": "Compose",
+        "runAfter": {
+          "Run_QAOA_candidate": [ "Succeeded" ]
+        },
+        "inputs": "@if(greater(int(coalesce(body('Run_QAOA_candidate')?['counts']?['1001'], 0)), 0), if(greater(int(coalesce(body('Run_QAOA_candidate')?['counts']?['0110'], 0)), 0), if(less(add(triggerBody()?['jobs']?[0]?['slotCosts']?[0], triggerBody()?['jobs']?[1]?['slotCosts']?[1]), add(triggerBody()?['jobs']?[0]?['slotCosts']?[1], triggerBody()?['jobs']?[1]?['slotCosts']?[0])), '1001', if(greater(add(triggerBody()?['jobs']?[0]?['slotCosts']?[0], triggerBody()?['jobs']?[1]?['slotCosts']?[1]), add(triggerBody()?['jobs']?[0]?['slotCosts']?[1], triggerBody()?['jobs']?[1]?['slotCosts']?[0])), '0110', if(greater(int(coalesce(body('Run_QAOA_candidate')?['counts']?['1001'], 0)), int(coalesce(body('Run_QAOA_candidate')?['counts']?['0110'], 0))), '1001', '0110'))), '1001'), '0110'), '')"
+      },
+      "Build_QAOA_schedule": {
+        "type": "Compose",
+        "runAfter": {
+          "Select_feasible_measurement": [ "Succeeded" ]
+        },
+        "inputs": {
+          "method": "QAOA",
+          "assignments": [
+            {
+              "jobId": "@triggerBody()?['jobs']?[0]?['id']",
+              "slotId": "@if(equals(outputs('Select_feasible_measurement'), '1001'), triggerBody()?['slots']?[0], triggerBody()?['slots']?[1])",
+              "cost": "@if(equals(outputs('Select_feasible_measurement'), '1001'), triggerBody()?['jobs']?[0]?['slotCosts']?[0], triggerBody()?['jobs']?[0]?['slotCosts']?[1])"
+            },
+            {
+              "jobId": "@triggerBody()?['jobs']?[1]?['id']",
+              "slotId": "@if(equals(outputs('Select_feasible_measurement'), '1001'), triggerBody()?['slots']?[1], triggerBody()?['slots']?[0])",
+              "cost": "@if(equals(outputs('Select_feasible_measurement'), '1001'), triggerBody()?['jobs']?[1]?['slotCosts']?[1], triggerBody()?['jobs']?[1]?['slotCosts']?[0])"
+            }
+          ],
+          "totalCost": "@if(equals(outputs('Select_feasible_measurement'), '1001'), add(triggerBody()?['jobs']?[0]?['slotCosts']?[0], triggerBody()?['jobs']?[1]?['slotCosts']?[1]), add(triggerBody()?['jobs']?[0]?['slotCosts']?[1], triggerBody()?['jobs']?[1]?['slotCosts']?[0]))",
+          "feasible": true,
+          "measurement": "@outputs('Select_feasible_measurement')",
+          "sampleCount": "@if(equals(outputs('Select_feasible_measurement'), '1001'), int(coalesce(body('Run_QAOA_candidate')?['counts']?['1001'], 0)), int(coalesce(body('Run_QAOA_candidate')?['counts']?['0110'], 0)))"
+        }
+      },
+      "Build_successful_result": {
+        "type": "Compose",
+        "runAfter": {
+          "Build_QAOA_schedule": [ "Succeeded" ]
+        },
+        "inputs": {
+          "backend": "HybridProductionScheduling",
+          "planningCycleId": "@triggerBody()?['planningCycleId']",
+          "decision": "@if(empty(outputs('Select_feasible_measurement')), 'ClassicalFallback', if(less(outputs('Build_QAOA_schedule')?['totalCost'], outputs('Greedy_baseline')?['totalCost']), 'QuantumImproved', 'ClassicalBaselineRetained'))",
+          "baseline": "@outputs('Greedy_baseline')",
+          "quantumCandidate": {
+            "status": "@if(empty(outputs('Select_feasible_measurement')), 'NoFeasibleSamples', 'Succeeded')",
+            "targetId": "@body('Run_QAOA_candidate')?['targetId']",
+            "jobId": "@body('Run_QAOA_candidate')?['jobId']",
+            "shots": "@body('Run_QAOA_candidate')?['shots']",
+            "schedule": "@if(empty(outputs('Select_feasible_measurement')), null, outputs('Build_QAOA_schedule'))",
+            "error": null
+          },
+          "selectedSchedule": "@if(and(not(empty(outputs('Select_feasible_measurement'))), less(outputs('Build_QAOA_schedule')?['totalCost'], outputs('Greedy_baseline')?['totalCost'])), outputs('Build_QAOA_schedule'), outputs('Greedy_baseline'))",
+          "improvement": {
+            "absoluteCostReduction": "@sub(outputs('Greedy_baseline')?['totalCost'], if(and(not(empty(outputs('Select_feasible_measurement'))), less(outputs('Build_QAOA_schedule')?['totalCost'], outputs('Greedy_baseline')?['totalCost'])), outputs('Build_QAOA_schedule')?['totalCost'], outputs('Greedy_baseline')?['totalCost']))",
+            "relativeCostReduction": "@if(equals(outputs('Greedy_baseline')?['totalCost'], 0), 0, div(sub(outputs('Greedy_baseline')?['totalCost'], if(and(not(empty(outputs('Select_feasible_measurement'))), less(outputs('Build_QAOA_schedule')?['totalCost'], outputs('Greedy_baseline')?['totalCost'])), outputs('Build_QAOA_schedule')?['totalCost'], outputs('Greedy_baseline')?['totalCost'])), outputs('Greedy_baseline')?['totalCost']))"
+          },
+          "approval": {
+            "required": true,
+            "status": "Pending"
+          }
+        }
+      },
+      "Build_failure_result": {
+        "type": "Compose",
+        "runAfter": {
+          "Run_QAOA_candidate": [ "Failed", "TimedOut" ]
+        },
+        "inputs": {
+          "backend": "HybridProductionScheduling",
+          "planningCycleId": "@triggerBody()?['planningCycleId']",
+          "decision": "ClassicalFallback",
+          "baseline": "@outputs('Greedy_baseline')",
+          "quantumCandidate": {
+            "status": "Failed",
+            "targetId": null,
+            "jobId": null,
+            "shots": 0,
+            "schedule": null,
+            "error": "@coalesce(actions('Run_QAOA_candidate')?['error']?['message'], 'Azure Quantum action failed.')"
+          },
+          "selectedSchedule": "@outputs('Greedy_baseline')",
+          "improvement": {
+            "absoluteCostReduction": 0,
+            "relativeCostReduction": 0
+          },
+          "approval": {
+            "required": true,
+            "status": "Pending"
+          }
+        }
+      },
+      "Build_final_result": {
+        "type": "Compose",
+        "runAfter": {
+          "Build_successful_result": [ "Succeeded", "Skipped" ],
+          "Build_failure_result": [ "Succeeded", "Skipped" ]
+        },
+        "inputs": "@if(equals(actions('Run_QAOA_candidate')?['status'], 'Succeeded'), outputs('Build_successful_result'), outputs('Build_failure_result'))"
       },
       "Success_response": {
         "type": "Response",
         "kind": "Http",
         "runAfter": {
-          "Run_hybrid_scheduler": [ "Succeeded" ]
+          "Build_final_result": [ "Succeeded" ]
         },
         "inputs": {
           "statusCode": 200,
@@ -91,26 +247,8 @@
             "workflowRunId": "@workflow()?['run']?['name']",
             "planningCycleId": "@triggerBody()?['planningCycleId']",
             "approvalRequired": true,
-            "result": "@body('Run_hybrid_scheduler')",
+            "result": "@outputs('Build_final_result')",
             "approvalInstructions": "After planner approval, POST planningCycleId, decision, and the selectedSchedule to ApplyApprovedProductionScheduleWorkflow."
-          }
-        }
-      },
-      "Failure_response": {
-        "type": "Response",
-        "kind": "Http",
-        "runAfter": {
-          "Run_hybrid_scheduler": [ "Failed", "TimedOut" ]
-        },
-        "inputs": {
-          "statusCode": 502,
-          "headers": {
-            "Content-Type": "application/json"
-          },
-          "body": {
-            "planningCycleId": "@triggerBody()?['planningCycleId']",
-            "error": "The scheduling backend did not return a candidate comparison.",
-            "details": "@result('Run_hybrid_scheduler')"
           }
         }
       }

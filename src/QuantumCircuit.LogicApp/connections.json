@@ -25,7 +25,7 @@
       "serviceProvider": {
         "id": "/serviceProviders/azureQuantumCircuit"
       },
-      "displayName": "Azure Quantum (multi-provider backend)"
+      "displayName": "Azure Quantum (in-host)"
     }
   },
   "managedApiConnections": {}

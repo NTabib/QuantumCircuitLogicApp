@@ -8,6 +8,7 @@ using QuantumCircuit.Connector;
 using QuantumCircuit.QSharp;
 
 await AzureQuantumConnectionTests.RunAsync();
+await AzureQuantumWorkspaceClientTests.RunAsync();
 if (args.Contains("--azure-connection-only"))
 {
     return;

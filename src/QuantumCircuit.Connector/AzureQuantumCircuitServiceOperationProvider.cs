@@ -6,6 +6,7 @@ namespace QuantumCircuit.Connector
     using System.Net.Http;
     using System.Text;
     using System.Threading.Tasks;
+    using Azure.Identity;
     using Microsoft.Azure.Workflows.ServiceProviders.Abstractions;
     using Microsoft.Azure.Workflows.ServiceProviders.WebJobs.Abstractions.Providers;
     using Microsoft.Azure.WebJobs.Description;
@@ -24,17 +25,20 @@ namespace QuantumCircuit.Connector
 
         private const uint BrandColor = 0x0078D4;
         private static readonly Uri IconUri = CreateIconUri();
-        private static readonly HttpClient HttpClient = new HttpClient
-        {
-            Timeout = TimeSpan.FromSeconds(210),
-        };
+        private readonly AzureQuantumWorkspaceClient workspaceClient;
 
         private readonly ServiceOperationApi serviceOperationApi;
         private readonly InsensitiveDictionary<ServiceOperation> apiOperations;
         private readonly List<ServiceOperation> expandedOperations;
 
         public AzureQuantumCircuitServiceOperationProvider()
+            : this(new AzureQuantumWorkspaceClient())
         {
+        }
+
+        public AzureQuantumCircuitServiceOperationProvider(AzureQuantumWorkspaceClient workspaceClient)
+        {
+            this.workspaceClient = workspaceClient;
             this.serviceOperationApi = BuildServiceOperationApi();
             var runCircuit = BuildOperation();
             this.apiOperations = new InsensitiveDictionary<ServiceOperation>
@@ -78,21 +82,7 @@ namespace QuantumCircuit.Connector
                     null);
             }
 
-            var endpoint = Environment.GetEnvironmentVariable("AZURE_QUANTUM_BACKEND_URL");
-            var functionKey = Environment.GetEnvironmentVariable("AZURE_QUANTUM_BACKEND_FUNCTION_KEY");
-            if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var endpointUri)
-                || (endpointUri.Scheme != Uri.UriSchemeHttps
-                    && !(endpointUri.IsLoopback && endpointUri.Scheme == Uri.UriSchemeHttp))
-                || string.IsNullOrWhiteSpace(functionKey))
-            {
-                throw new ServiceOperationsProviderException(
-                    HttpStatusCode.ServiceUnavailable,
-                    ServiceOperationsErrorResponseCode.InvalidServiceProviderConnection,
-                    "Configure AZURE_QUANTUM_BACKEND_URL and AZURE_QUANTUM_BACKEND_FUNCTION_KEY in the Logic App host settings.",
-                    null);
-            }
-
-            var parameters = serviceOperationRequest.Parameters ?? new InsensitiveDictionary<JToken>();
+            var parameters = serviceOperationRequest?.Parameters ?? new InsensitiveDictionary<JToken>();
             var initialState = GetRequired(parameters, "initialState");
             var gates = GetRequired(parameters, "gates");
             if (initialState.Type != JTokenType.String || gates is not JArray)
@@ -100,9 +90,18 @@ namespace QuantumCircuit.Connector
                 throw InvalidParameter("initialState must be a bit string and gates must be an instruction array.");
             }
 
-            var shots = parameters.TryGetValue("shots", out var shotsToken) && shotsToken?.Type != JTokenType.Null
-                ? shotsToken.Value<int>()
-                : 100;
+            var shots = 100;
+            if (parameters.TryGetValue("shots", out var shotsToken)
+                && shotsToken != null
+                && shotsToken.Type != JTokenType.Null)
+            {
+                if (shotsToken.Type != JTokenType.Integer)
+                {
+                    throw InvalidParameter($"shots must be an integer between 1 and {QuantumCircuitExecutor.MaxShots}.");
+                }
+
+                shots = shotsToken.Value<int>();
+            }
             if (shots is < 1 or > QuantumCircuitExecutor.MaxShots)
             {
                 throw InvalidParameter($"shots must be between 1 and {QuantumCircuitExecutor.MaxShots}.");
@@ -114,55 +113,70 @@ namespace QuantumCircuit.Connector
                 ["gates"] = gates.DeepClone(),
                 ["shots"] = shots,
             };
-
-            using var request = new HttpRequestMessage(HttpMethod.Post, endpointUri)
-            {
-                Content = new StringContent(requestBody.ToString(Formatting.None), Encoding.UTF8, "application/json"),
-            };
-            request.Headers.Add("x-functions-key", functionKey);
-
-            HttpResponseMessage response;
             try
             {
-                response = await HttpClient.SendAsync(request).ConfigureAwait(false);
+                var result = await this.workspaceClient.RunCircuitAsync(requestBody).ConfigureAwait(false);
+                return new ServiceOperationResponse(result, HttpStatusCode.OK);
+            }
+            catch (ArgumentException ex)
+            {
+                throw InvalidParameter(ex.Message);
+            }
+            catch (TimeoutException ex)
+            {
+                throw new ServiceOperationsProviderException(
+                    HttpStatusCode.GatewayTimeout,
+                    ServiceOperationsErrorResponseCode.ServiceOperationFailed,
+                    "The Azure Quantum job did not complete before the configured timeout.",
+                    ex);
             }
             catch (TaskCanceledException ex)
             {
                 throw new ServiceOperationsProviderException(
                     HttpStatusCode.GatewayTimeout,
                     ServiceOperationsErrorResponseCode.ServiceOperationFailed,
-                    "The Azure Quantum backend did not respond before the connector timeout.",
+                    "The Azure Quantum workspace or storage request timed out.",
                     ex);
             }
-
-            using (response)
+            catch (AzureQuantumApiException ex)
             {
-                var responseText = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                if (!response.IsSuccessStatusCode)
-                {
-                    var detail = responseText.Length > 1000 ? responseText.Substring(0, 1000) : responseText;
-                    throw new ServiceOperationsProviderException(
-                        HttpStatusCode.BadGateway,
-                        ServiceOperationsErrorResponseCode.ServiceOperationFailed,
-                        $"The Azure Quantum backend returned HTTP {(int)response.StatusCode}: {detail}",
-                        null);
-                }
-
-                JObject body;
-                try
-                {
-                    body = JObject.Parse(responseText);
-                }
-                catch (JsonReaderException ex)
-                {
-                    throw new ServiceOperationsProviderException(
-                        HttpStatusCode.BadGateway,
-                        ServiceOperationsErrorResponseCode.ServiceOperationFailed,
-                        "The Azure Quantum backend returned invalid JSON.",
-                        ex);
-                }
-
-                return new ServiceOperationResponse(body, HttpStatusCode.OK);
+                throw new ServiceOperationsProviderException(
+                    HttpStatusCode.BadGateway,
+                    ServiceOperationsErrorResponseCode.ServiceOperationFailed,
+                    ex.Message,
+                    ex);
+            }
+            catch (HttpRequestException ex)
+            {
+                throw new ServiceOperationsProviderException(
+                    HttpStatusCode.BadGateway,
+                    ServiceOperationsErrorResponseCode.ServiceOperationFailed,
+                    "The Logic App host could not communicate with the Azure Quantum workspace or job storage.",
+                    ex);
+            }
+            catch (AuthenticationFailedException ex)
+            {
+                throw new ServiceOperationsProviderException(
+                    HttpStatusCode.ServiceUnavailable,
+                    ServiceOperationsErrorResponseCode.ServiceOperationFailed,
+                    "The Logic App managed identity could not obtain an Azure Quantum access token.",
+                    ex);
+            }
+            catch (AzureQuantumConfigurationException ex)
+            {
+                throw new ServiceOperationsProviderException(
+                    HttpStatusCode.ServiceUnavailable,
+                    ServiceOperationsErrorResponseCode.InvalidServiceProviderConnection,
+                    ex.Message,
+                    ex);
+            }
+            catch (InvalidOperationException ex)
+            {
+                throw new ServiceOperationsProviderException(
+                    HttpStatusCode.BadGateway,
+                    ServiceOperationsErrorResponseCode.ServiceOperationFailed,
+                    ex.Message,
+                    ex);
             }
         }
 
@@ -191,7 +205,7 @@ namespace QuantumCircuit.Connector
             Properties = new ServiceOperationApiProperties
             {
                 BrandColor = BrandColor,
-                Description = "Submits a gate-only circuit to a supported Rigetti, IonQ, or Quantinuum target through the Azure Quantum Python backend.",
+                Description = "Submits gate-only circuits directly to Azure Quantum using the Logic App managed identity.",
                 DisplayName = "Azure Quantum Circuit",
                 IconUri = IconUri,
                 Capabilities = new[] { ApiCapability.Actions },
@@ -206,7 +220,7 @@ namespace QuantumCircuit.Connector
                                 UIDefinition = new UIDefinition
                                 {
                                     DisplayName = "Backend",
-                                    Description = "Use AzureQuantum. The workspace target is configured on the Python backend.",
+                                    Description = "Use AzureQuantum. Workspace, target, and endpoint are configured on the Logic App host.",
                                     Tooltip = Backend,
                                     Constraints = new Constraints { Required = "true", Default = Backend },
                                 },
@@ -226,7 +240,7 @@ namespace QuantumCircuit.Connector
             {
                 Api = BuildServiceOperationApi().GetFlattenedApi(),
                 Summary = "Run a circuit on Azure Quantum",
-                Description = "Converts supported unitary gate instructions to the configured target provider's native circuit format, waits for the Azure Quantum job, and returns measured counts.",
+                Description = "Converts supported unitary gate instructions to the configured target provider's native circuit format, submits the Azure Quantum job, and returns measured counts.",
                 Visibility = Visibility.Important,
                 OperationType = OperationType.ServiceProvider,
                 BrandColor = BrandColor,

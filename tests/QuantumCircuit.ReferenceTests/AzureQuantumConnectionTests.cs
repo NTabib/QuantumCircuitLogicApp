@@ -1,7 +1,12 @@
 using System;
 using System.IO;
+using System.Linq;
+using System.Net.Http;
 using System.Threading.Tasks;
+using Azure.Core;
+using Microsoft.Azure.WebJobs;
 using Microsoft.Azure.Workflows.ServiceProviders.Abstractions;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.WindowsAzure.ResourceStack.Common.Collections;
 using Microsoft.WindowsAzure.ResourceStack.Common.Swagger.Entities;
 using Newtonsoft.Json.Linq;
@@ -11,7 +16,41 @@ internal static class AzureQuantumConnectionTests
 {
     public static async Task RunAsync()
     {
-        var provider = new AzureQuantumCircuitServiceOperationProvider();
+        var constructors = typeof(AzureQuantumWorkspaceClient).GetConstructors();
+        if (constructors.Length != 1 || constructors[0].GetParameters().Length != 0)
+        {
+            throw new InvalidOperationException(
+                "Runtime activation must expose only the default Azure Quantum credential constructor.");
+        }
+
+        var services = new ServiceCollection();
+        services.AddSingleton<TokenCredential>(_ => null);
+        services.AddSingleton<HttpClient>();
+        using (var activationServices = services.BuildServiceProvider())
+        {
+            _ = ActivatorUtilities.CreateInstance<AzureQuantumWorkspaceClient>(activationServices);
+        }
+
+        new QuantumCircuitStartup().Configure(new TestWebJobsBuilder(services));
+        using var hostServices = services.BuildServiceProvider();
+        var client = hostServices.GetRequiredService<AzureQuantumWorkspaceClient>();
+        if (!ReferenceEquals(client, hostServices.GetRequiredService<AzureQuantumWorkspaceClient>()))
+        {
+            throw new InvalidOperationException("The Azure Quantum workspace client must be a host singleton.");
+        }
+
+        var provider = hostServices.GetRequiredService<AzureQuantumCircuitServiceOperationProvider>();
+        if (provider.GetOperations(false).Count() != 1
+            || !provider.GetOperations(false).Any(operation =>
+                operation.Name == AzureQuantumCircuitServiceOperationProvider.RunCircuitOperationId))
+        {
+            throw new InvalidOperationException("The Azure Quantum connector must expose only runCircuit.");
+        }
+        if (provider.GetOperations(true).Count() != 1)
+        {
+            throw new InvalidOperationException("Azure Quantum must publish a manifest only for runCircuit.");
+        }
+
         if (provider.GetService().Properties.ConnectionParameters is not ConnectionParameters parameters)
         {
             throw new InvalidOperationException("Azure Quantum connection metadata is missing.");
@@ -39,7 +78,23 @@ internal static class AzureQuantumConnectionTests
             throw new InvalidOperationException("connections.json must contain the required Azure Quantum backend value.");
         }
 
-        ServiceOperationRequest request = null;
+        var workflowPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,
+            "..", "..", "..", "..", "..", "src", "QuantumCircuit.LogicApp",
+            "HybridProductionSchedulingWorkflow", "workflow.json"));
+        var workflow = JObject.Parse(File.ReadAllText(workflowPath));
+        var actions = workflow["definition"]?["actions"];
+        var quantumAction = actions?["Run_QAOA_candidate"];
+        if (quantumAction?["type"]?.Value<string>() != "ServiceProvider"
+            || quantumAction["inputs"]?["serviceProviderConfiguration"]?["connectionName"]?.Value<string>() != "azureQuantumCircuit"
+            || quantumAction["inputs"]?["serviceProviderConfiguration"]?["operationId"]?.Value<string>()
+                != AzureQuantumCircuitServiceOperationProvider.RunCircuitOperationId
+            || actions?["Greedy_baseline"]?["type"]?.Value<string>() != "Compose"
+            || actions?["Select_feasible_measurement"]?["type"]?.Value<string>() != "Compose"
+            || workflow.ToString().Contains("runHybridSchedule", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Scheduling logic must live in the workflow and use only runCircuit for quantum execution.");
+        }
+
         foreach (var connection in new InsensitiveDictionary<JToken>[]
         {
             null,
@@ -49,29 +104,10 @@ internal static class AzureQuantumConnectionTests
             new() { { "backend", new JValue("FullState") } },
         })
         {
-            await AssertRejectedAsync(provider, connection, request, "Connection backend must be 'AzureQuantum'.");
+            await AssertRejectedAsync(provider, connection, null, "Connection backend must be 'AzureQuantum'.");
         }
 
-        var endpoint = Environment.GetEnvironmentVariable("AZURE_QUANTUM_BACKEND_URL");
-        var key = Environment.GetEnvironmentVariable("AZURE_QUANTUM_BACKEND_FUNCTION_KEY");
-        try
-        {
-            Environment.SetEnvironmentVariable("AZURE_QUANTUM_BACKEND_URL", null);
-            Environment.SetEnvironmentVariable("AZURE_QUANTUM_BACKEND_FUNCTION_KEY", null);
-            var connection = new InsensitiveDictionary<JToken>
-            {
-                { "backend", new JValue(AzureQuantumCircuitServiceOperationProvider.Backend) },
-            };
-            await AssertRejectedAsync(provider, connection, request,
-                "Configure AZURE_QUANTUM_BACKEND_URL and AZURE_QUANTUM_BACKEND_FUNCTION_KEY");
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("AZURE_QUANTUM_BACKEND_URL", endpoint);
-            Environment.SetEnvironmentVariable("AZURE_QUANTUM_BACKEND_FUNCTION_KEY", key);
-        }
-
-        Console.WriteLine("Azure Quantum connection metadata and missing/invalid/valid connection checks passed.");
+        Console.WriteLine("Azure Quantum connection metadata and missing/invalid connection checks passed.");
     }
 
     private static async Task AssertRejectedAsync(
@@ -90,5 +126,15 @@ internal static class AzureQuantumConnectionTests
         }
 
         throw new InvalidOperationException($"Expected connector error: {expectedMessage}");
+    }
+
+    private sealed class TestWebJobsBuilder : IWebJobsBuilder
+    {
+        public TestWebJobsBuilder(IServiceCollection services)
+        {
+            this.Services = services;
+        }
+
+        public IServiceCollection Services { get; }
     }
 }

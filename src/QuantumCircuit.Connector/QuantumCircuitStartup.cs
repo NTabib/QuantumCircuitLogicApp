@@ -24,6 +24,8 @@ namespace QuantumCircuit.Connector
             builder.AddExtension<AzureQuantumCircuitServiceProvider>();
             builder.Services.TryAddSingleton<QuantumCircuitServiceOperationProvider>();
             builder.Services.TryAddSingleton<QuantumCircuitBuilderServiceOperationProvider>();
+            // Do not inject the workflow host's unrelated TokenCredential registration.
+            builder.Services.TryAddSingleton<AzureQuantumWorkspaceClient>(_ => new AzureQuantumWorkspaceClient());
             builder.Services.TryAddSingleton<AzureQuantumCircuitServiceOperationProvider>();
         }
     }

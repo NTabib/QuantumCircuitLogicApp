@@ -19,12 +19,17 @@
   </PropertyGroup>
 
   <ItemGroup>
+	<PackageReference Include="Azure.Identity" Version="1.13.2" />
 	<PackageReference Include="Microsoft.Azure.Workflows.WebJobs.Extension" Version="1.170.91" />
 	<PackageReference Include="Microsoft.Quantum.Simulators" Version="0.28.302812" />
   </ItemGroup>
 
   <ItemGroup>
 	<ProjectReference Include="..\QuantumCircuit.QSharp\QuantumCircuit.QSharp.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+	<InternalsVisibleTo Include="QuantumCircuit.ReferenceTests" />
   </ItemGroup>
 
 </Project>

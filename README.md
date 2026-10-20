@@ -19,7 +19,9 @@ QuantumCircuitLogicApp/
 │  │  ├─ QuantumCircuitBuilderServiceOperationProvider.cs # gates + measure/reset/IF actions
 │  │  ├─ QuantumCircuitServiceOperationProvider.cs        # generic runCircuit action
 │  │  ├─ QuantumCircuitExecutor.cs                       # validates and executes full circuits
-│  │  └─ QuantumCircuitStartup.cs                        # registers both providers
+│  │  ├─ AzureQuantumCircuitServiceOperationProvider.cs  # direct workspace and scheduling actions
+│  │  ├─ AzureQuantumWorkspaceClient.cs                   # managed-identity REST submission
+│  │  └─ QuantumCircuitStartup.cs                        # registers built-in providers
 │  └─ QuantumCircuit.LogicApp/         # NuGet-based Logic Apps Standard project
 │     ├─ host.json / connections.json / local.settings.json
 │     ├─ XGateDemoWorkflow/workflow.json  # X built with generic createCircuit/addX/runCircuit
@@ -436,72 +438,46 @@ python -m unittest discover -s .\tests\AzureQuantumBackendTests -v
 
 The existing `quantumCircuit/runCircuit` service provider remains the local Q# `FullState`
 simulator. A separate `azureQuantumCircuit/runCircuit` operation and `AzureQuantumBellWorkflow`
-use the same visual builder, then POST the completed circuit to a separate Python Azure Functions
-backend. That backend selects a native circuit adapter from the configured target ID: Quil for Rigetti,
-IonQ circuit JSON for IonQ, or OpenQASM 2.0 for Quantinuum. It waits for the Azure Quantum job and
-returns the target, job ID, measured counts, probabilities, and shot count.
-The new path does not replace or change any existing simulation workflow.
+use the same visual builder and submit directly from the Logic App Standard host through the
+`AzureQuantumCircuitServiceOperationProvider`. The in-process provider uses `DefaultAzureCredential`
+and the Logic App's managed identity; no separate Azure Function, Function key, or backend HTTP hop
+is required. It obtains workspace storage SAS URLs, uploads the native program, creates and polls the
+Azure Quantum job, downloads its results, and returns the target, job ID, measured counts,
+probabilities, and shot count. The local simulator and its workflows remain unchanged.
 
-This deliberately runs the Azure Quantum submission service in a separate **Linux Python 3.11
-Function App**; its cloud execution is independent of the classic Q# SDK used by the local simulator. The
-backend source is `src\QuantumCircuit.AzureQuantumBackend`. Create a Function App with Functions v4,
-configure its `AZURE_QUANTUM_WORKSPACE_RESOURCE_ID`, `AZURE_QUANTUM_TARGET_ID`, and
-`AZURE_QUANTUM_JOB_TIMEOUT_SECONDS` app settings, then grant its system-assigned managed identity
-the Azure Quantum workspace role that permits job submission and result reading (currently
-**Quantum Workspace Data Contributor**). From the backend source directory, publish it with:
+The connector calls the Azure Quantum workspace data plane directly (API version
+`2026-01-15-preview`) and uses the `https://quantum.microsoft.com/.default` Entra token scope.
+Configure the Logic App after deploying it and creating the Azure Quantum workspace:
 
 ```powershell
-func azure functionapp publish <backend-function-app-name> --python --build remote
-```
-
-The backend uses `DefaultAzureCredential`: locally, sign in with `az login`; in Azure, it uses the
-Function App's managed identity. The deploy script currently assigns **Quantum Workspace Data
-Contributor**; check the workspace's current Azure Quantum RBAC guidance and assign the equivalent
-least-privilege job submit/read role if that role name is unavailable in your tenant. Select a target
-available in that workspace and compatible with the circuit. This deployment defaults to Rigetti's
-free cloud simulator, `rigetti.sim.qvm`. Supported targets are selected solely by
-`AZURE_QUANTUM_TARGET_ID`: `rigetti.sim.qvm` or `rigetti.qpu.*` (native Quil),
-`ionq.simulator` or `ionq.qpu.*` (IonQ circuit JSON), and `quantinuum.sim.*` or
-`quantinuum.qpu.*` (OpenQASM 2.0). The SDK adapters use Azure's `rigetti.quil.v1`,
-`ionq.circuit.v1`, and `honeywell.openqasm.v1` formats respectively. See the
-[Rigetti](https://learn.microsoft.com/azure/quantum/provider-rigetti),
-[IonQ](https://learn.microsoft.com/azure/quantum/provider-ionq), and
-[Quantinuum](https://learn.microsoft.com/azure/quantum/provider-quantinuum) target documentation
-to confirm the target IDs currently enabled in your workspace. Providers that require pulse/analog
-programs, including Pasqal, are not supported by this gate-circuit backend.
-
-To create and configure the separate backend and its managed identity, run
-`deploy\Deploy-AzureQuantumBackend.ps1` after the Logic App, storage account, and Azure Quantum
-workspace exist:
-
-```powershell
-.\deploy\Deploy-AzureQuantumBackend.ps1 `
+.\deploy\Configure-AzureQuantumLogicApp.ps1 `
   -ResourceGroup <resource-group> `
   -LogicAppName <logic-app-name> `
-  -FunctionAppName <globally-unique-function-app-name> `
-  -StorageAccountName <existing-storage-account-name> `
-  -Location <function-app-region> `
   -WorkspaceResourceId <quantum-workspace-resource-id> `
+  -WorkspaceLocation <workspace-region> `
   -TargetId rigetti.sim.qvm
 ```
 
-Set `-TargetId` to an enabled supported target when selecting IonQ or Quantinuum. For an existing
-Function App, changing `AZURE_QUANTUM_TARGET_ID` is sufficient; the backend code does not need to be
-republished. The script grants the backend Function App identity the workspace data-contributor role,
-publishes the Python app, and sets `AZURE_QUANTUM_BACKEND_URL` plus the function-scoped key as Logic App host
-settings (not in source control). For production, replace the key setting with a Key Vault reference.
-The function key protects the backend HTTP endpoint; the backend identity, not the Logic App, accesses
-the Quantum workspace. `connections.json` registers the new service provider without embedding
-credentials. Its `serviceProviderConnections.azureQuantumCircuit.parameterValues` must be
-`{"backend":"AzureQuantum"}`, not `{}`: Logic Apps requires nonempty connection values even when
-authentication is configured through host settings. For a designer-created connection, set
-**Backend** to `AzureQuantum`. If `Run_on_Azure_Quantum` fails with
-`MissingServiceProviderConnectionParameterValues`, redeploy the corrected Logic App connector
-and `connections.json` together, or update the deployed connection values and save the workflow.
-Redeploying only the Python Function App does not update the Logic App connection.
-The existing `deploy\deploy.ps1` deliberately does not create a workspace or backend;
-run this separate setup before calling `AzureQuantumBellWorkflow`. The Azure Quantum workspace and
-provider must already be provisioned and the configured target must be enabled in that workspace.
+The script enables/reuses the Logic App system-assigned identity, grants it **Quantum Workspace
+Data Contributor** on the workspace, and sets `AZURE_QUANTUM_ENDPOINT`,
+`AZURE_QUANTUM_WORKSPACE_RESOURCE_ID`, `AZURE_QUANTUM_TARGET_ID`, and
+`AZURE_QUANTUM_JOB_TIMEOUT_SECONDS` on the Logic App host. Confirm the current Azure Quantum RBAC
+role guidance and use an equivalent least-privilege role if available in your tenant. Locally,
+`DefaultAzureCredential` can use `az login`; in Azure it uses the Logic App managed identity.
+`AZURE_QUANTUM_ENDPOINT` is `https://<workspace-region>.quantum.azure.com/`.
+
+Select an enabled target using `AZURE_QUANTUM_TARGET_ID`: `rigetti.sim.qvm` or `rigetti.qpu.*`
+(Quil), `ionq.simulator` or `ionq.qpu.*` (IonQ circuit JSON), and `quantinuum.sim.*` or
+`quantinuum.qpu.*` (OpenQASM 2.0). The corresponding Azure formats are `rigetti.quil.v1`,
+`ionq.circuit.v1`, and `honeywell.openqasm.v1`. See the
+[Rigetti](https://learn.microsoft.com/azure/quantum/provider-rigetti),
+[IonQ](https://learn.microsoft.com/azure/quantum/provider-ionq), and
+[Quantinuum](https://learn.microsoft.com/azure/quantum/provider-quantinuum) documentation for
+current target IDs and restrictions. Pulse/analog providers such as Pasqal are not supported.
+`connections.json` must retain
+`serviceProviderConnections.azureQuantumCircuit.parameterValues = {"backend":"AzureQuantum"}`.
+For a designer-created connection set **Backend** to `AzureQuantum`; workspace and identity
+configuration live in host settings, not connection secrets.
 
 The hardware path accepts computational-basis initial states, supported unitary gates (`H`, `X`,
 `Y`, `Z`, `S`, `S_DAG`, `T`, `T_DAG`, `CNOT`, `CZ`, `SWAP`, `TOFFOLI`, `RX`, `RY`, `RZ`) and
@@ -511,36 +487,23 @@ QIS circuit schema, and OpenQASM 2.0; target-specific gate/profile limits and wo
 still apply. IonQ simulator histograms are exact distributions rather than sampled shots; the backend
 converts their weights to an integer histogram summing to the requested shot count. The sample
 workflow submits H(0), CNOT(0,1), so its ideal counts are split between `00` and `11`;
-real QPU noise and finite shots affect the observed distribution. The backend waits synchronously
-for up to 180 seconds, while the connector HTTP timeout is 210 seconds. A remote job may continue
-after a synchronous timeout; automatic workflow retry is disabled to avoid accidental duplicate
-submissions, so inspect the workspace job status before rerunning. Use a simulator target first:
-QPU submissions may incur provider charges.
-
-If publishing shows an empty `Functions in ...` list followed by `Error retrieving function keys`,
-the Python host may have failed to index `function_app.py`. Check the backend's Application Insights
-exceptions or Log stream for the underlying import error. The backend imports `azure.quantum` and its
-core Rigetti, IonQ, and Quantinuum target adapters, installed through the `azure-quantum` package in
-`requirements.txt`; `qdk.azure` is not the adapter namespace. Native submissions avoid the
-QDK/Qiskit extra's Linux wheels, which require glibc 2.35 and cannot be installed by the
-Debian Bullseye Oryx builder. No QDK or Qiskit runtime is required by this backend.
-Republish from `src\QuantumCircuit.AzureQuantumBackend` with
-`func azure functionapp publish <backend-function-app-name> --python --build remote`, or rerun
-`deploy\Deploy-AzureQuantumBackend.ps1` with the same parameters to also configure the Logic App key.
-The deployment script waits for discovery of both `run_quantum_circuit` and `run_hybrid_schedule`,
-including their function keys, before configuring the Logic App; it fails with indexing guidance if
-either function remains unavailable.
+real QPU noise and finite shots affect the observed distribution. The in-host connector waits synchronously
+for up to 180 seconds. A remote job may continue after a synchronous timeout; automatic workflow
+retry is disabled to avoid duplicate submissions, so inspect the workspace job status before
+rerunning. Use a simulator target first: QPU submissions may incur provider charges. The older
+`src\QuantumCircuit.AzureQuantumBackend` Python source and offline tests remain as reference
+material; the Logic App workflows no longer call or require that Function App.
 
 ## Hybrid production scheduling pilot
 
 `HybridProductionSchedulingWorkflow` is a deliberately tiny end-to-end pilot, not a production
 scheduler. An ERP/MES planning event (or test client) POSTs a normalized two-job/two-slot cost model.
-The Logic App sends it to the Python `run_hybrid_schedule` Function, which builds a deterministic
-classical greedy baseline and a one-layer, four-qubit QAOA assignment circuit. That circuit is sent
-through the configured Rigetti, IonQ, or Quantinuum gate backend. The Function independently rejects
-invalid assignments and selects the QAOA result only when a sampled schedule is feasible and has a
-lower cost than the baseline; on an unavailable/failed quantum job it returns the classical schedule
-and an explicit quantum status/error. It never retries a quantum submission automatically.
+The workflow itself computes the deterministic greedy baseline, constructs the one-layer four-qubit
+QAOA circuit, compares feasible measured assignments, and applies the classical fallback. Its only
+connector action is `azureQuantumCircuit/runCircuit`, which handles Azure Quantum circuit execution;
+there is no scheduler class or scheduling-specific connector operation. It selects the QAOA result only
+when a sampled schedule is feasible and has lower cost than the baseline. A failed or timed-out quantum
+action returns the classical schedule and failure details. Quantum submission retries are disabled.
 
 The request contract is:
 
@@ -557,12 +520,14 @@ The request contract is:
 }
 ```
 
-`slotCosts` must contain one finite, non-negative score per slot, in the same order as `slots`.
-These are objective units supplied by the ERP/MES adapter; the sample values are not dollars. The
-classical baseline greedily assigns each job to its least-cost remaining slot. QAOA uses a one-hot
-assignment encoding with penalty terms, fixed/default angles, and four qubits; measurements that
-violate the assignment constraints are discarded. The output contains both candidates, the measured
-Azure Quantum job ID when available, the chosen schedule, objective improvement, and
+`slotCosts` must contain one finite, non-negative score per slot, in the same order as `slots`; the
+workflow limits each cost to 1,000,000,000 and shots to 1-1,000. These are objective units supplied
+by the ERP/MES adapter; the sample values are not dollars. The classical baseline greedily assigns
+each job to its least-cost remaining slot. QAOA uses a one-hot assignment encoding with penalty terms,
+optional `gamma`/`beta` angles (defaults 0.7/0.4), and four qubits. The workflow checks the two
+feasible bit strings (`1001` and `0110`), discards other outcomes, and keeps the baseline unless the
+best feasible quantum schedule costs less. The output contains both candidates, the measured Azure
+Quantum job ID when available, the chosen schedule, objective improvement, and
 `approval.status = Pending`.
 
 An approval system or planner reviews that result and POSTs `planningCycleId`, `decision`
@@ -573,30 +538,12 @@ those two Logic App host settings for your MES API; its endpoint must independen
 schedule and treat the cycle ID idempotently. The Request trigger callback URLs are SAS-protected and
 must be handled as secrets.
 
-The backend deployment script configures the secured `run-hybrid-schedule` URL and its separate
-function key as `AZURE_QUANTUM_SCHEDULING_BACKEND_URL` and
-`AZURE_QUANTUM_SCHEDULING_FUNCTION_KEY`. The QAOA call is synchronous and can time out while a
-hardware target is queued, so start with an enabled simulator target. This pilot models only two jobs
+The QAOA call is synchronous and can time out while a hardware target is queued, so start with an
+enabled simulator target. This pilot models only two jobs
 and two slots; it has no precedence, machine eligibility, duration, setup, inventory, or shift-calendar
-constraints. It does not establish quantum advantage. Test the workflow and response handling offline
-with the Azure backend unit tests; no live quantum job is part of the deployment smoke tests.
-
-If Core Tools reports `Failed to retrieve remote build status`, that is not confirmation of a
-successful deployment. The deployment script uses Azure CLI ZIP deployment with `--build-remote true`
-and a 20-minute deployment timeout, and packages only `function_app.py`, `host.json`, and
-`requirements.txt` (not local Python packages or caches). It stops on a build failure before
-requesting function keys and synchronizes the deployed function triggers before checking discovery.
-Inspect the remote deployment and its build log with:
-
-```powershell
-az webapp log deployment list --resource-group <resource-group> --name <backend-function-app-name>
-az webapp log deployment show --resource-group <resource-group> --name <backend-function-app-name> --deployment-id <deployment-id>
-```
-
-Deployment status `4` means success; `3` means failure; `0`, `1`, and `2` mean deployment has not
-completed. If a build remains stuck at dependency installation, inspect the detailed Oryx log
-linked from the deployment log before starting another deployment. SCM basic authentication is
-not required to use the deployment script; do not enable it merely to bypass this status error.
+constraints. It does not establish quantum advantage. Test the workflow contract offline with the reference test project and Python backend unit tests; no
+live quantum job is part of the deployment smoke tests. The Python backend is retained only as
+reference code for the Azure Quantum circuit adapter; it no longer contains scheduling logic.
 
 ## 5. Run locally
 
@@ -635,17 +582,17 @@ What the script does:
 ### CI/CD
 
 The same steps map to a pipeline: `az deployment group create` (Bicep) → `dotnet publish` →
-`azure/functions-action` or `az logicapp deployment source config-zip`. Keep the callback URL in a
-secret store (it contains a SAS signature).
+`az logicapp deployment source config-zip`. Configure the Logic App managed identity and workspace
+host settings with `Configure-AzureQuantumLogicApp.ps1`. Keep callback URLs in a secret store
+(they contain SAS signatures).
 
 ## Notes & limitations
 
 * **QDK version**: the local in-process .NET simulator uses the *classic* QDK
-  (`Microsoft.Quantum.Sdk` 0.28, last release). The separate, optional Azure Quantum path uses the
-  Python Azure Quantum SDK with native Quil, IonQ circuit JSON, or Quantinuum OpenQASM adapters; it
-  does not replace the simulator or load the classic SDK in its
-  Function App. Actual QPU execution depends on the selected workspace target, provider availability,
-  circuit compatibility, and provider billing.
+  (`Microsoft.Quantum.Sdk` 0.28, last release). The in-host Azure Quantum connector uses Azure
+  Identity and the Azure Quantum REST data plane with native Quil, IonQ circuit JSON, or Quantinuum
+  OpenQASM; it does not replace or depend on the local simulator. Actual QPU execution depends on
+  the selected workspace target, provider availability, circuit compatibility, and provider billing.
 * The full-state simulator is limited to 20 qubits for `runCircuit` (state-vector memory grows
   exponentially); the application also caps circuits at 256 gates and 1,000 shots.
 * The X gate on a basis state is deterministic, so `counts` is always 100 % on the flipped value. By
