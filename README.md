@@ -1,8 +1,19 @@
-# Quantum Circuit – Custom built-in connector (Q#) for Azure Logic Apps Standard
+# Quantum Circuit – workflow-based quantum algorithms in Azure Logic Apps Standard and Q# simulation
 
-This solution wraps the **Microsoft Quantum Development Kit (Q# SDK)** in a **custom built-in
-(service provider) connector** for **Logic Apps Standard**, uses it from a stateful workflow and
-deploys everything to Azure.
+This solution demonstrates how to model and run **quantum algorithms as workflow-driven circuit logic** in
+**Azure Logic Apps Standard**, while also supporting a **Q# full-state simulation path** for local validation
+and algorithm development. The project combines:
+
+- a **custom built-in service provider connector** for Logic Apps Standard
+- a **native Azure Quantum provider path** for submitting provider-specific circuits to Azure Quantum targets
+- a **Q# SDK execution backend** for full-state simulation
+- an **Azure deployment package** for running the workflow in the cloud
+
+The solution is designed for quantum algorithm experimentation and workflow orchestration: business
+processes can prepare a circuit description, invoke the quantum engine, collect measurements, and feed the
+results into downstream workflow logic. The workflow itself acts as the algorithm authoring surface: a circuit
+is assembled visually in Logic Apps, then executed through either the Q# full-state simulator or Azure Quantum
+provider targets.
 
 Read the [illustrated implementation article](docs/quantum-computing-on-a-canvas.html),
 **Quantum Computing on a Canvas: Building a Visual Designer with Azure Logic Apps and Q#**.
@@ -36,15 +47,29 @@ QuantumCircuitLogicApp/
    └─ deploy.ps1                       # provision + build + zip deploy + smoke tests
 ```
 
-## 1. Q# library: one complete-circuit operation
+## 1. Architecture: workflow algorithms plus Q# simulation and Azure Quantum execution
 
-`QuantumCircuit.qs` exposes `RunCircuit`, which allocates and prepares a register, applies the ordered
-instruction list, then measures only after the full circuit. The Q# dispatcher covers H, X, Y, Z,
-S/S-dagger, T/T-dagger, CNOT, CZ, SWAP, Toffoli, and Rx/Ry/Rz. X is gate code 1 in that same dispatcher;
-there is no separate Q# `ApplyXGate` operation or X-only simulator wrapper.
+The project supports three execution styles:
 
-The project uses classic `Microsoft.Quantum.Sdk` (QDK 0.28). The Q# compiler generates a .NET
-`RunCircuit` operation class at build time; the connector calls it on the full-state simulator.
+1. **Workflow-defined circuit algorithms** in Logic Apps Standard
+   - the workflow assembles a classical circuit descriptor
+   - the connector validates and executes it as one coherent quantum program
+   - the result is returned as classical measurement counts and probabilities
+
+2. **Q# full-state simulation**
+   - `QuantumCircuit.qs` exposes `RunCircuit`, which allocates and prepares a register, applies the ordered
+     instruction list, then measures only after the full circuit
+   - the project uses classic `Microsoft.Quantum.Sdk` (QDK 0.28)
+   - the Q# compiler generates a .NET `RunCircuit` operation class at build time; the connector calls it on
+     the full-state simulator
+
+3. **Native Azure Quantum provider execution**
+   - the Logic App host can submit jobs to Azure Quantum targets directly using the managed identity
+   - the same circuit description is translated to provider-native formats for Rigetti, IonQ, and Quantinuum
+   - this enables production-style job submission while keeping the workflow as the orchestration layer
+
+The Q# circuit dispatcher covers H, X, Y, Z, S/S-dagger, T/T-dagger, CNOT, CZ, SWAP, Toffoli, and Rx/Ry/Rz.
+X is gate code 1 in that same dispatcher; there is no separate Q# `ApplyXGate` operation or X-only simulator wrapper.
 
 ## 2. The built-in connectors
 
