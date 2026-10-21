@@ -197,15 +197,10 @@ namespace QuantumCircuit.Connector
                     QuantumCircuitExecutor.ValidateCircuit(initialState.Value<string>(), new JArray(), new JArray());
                     circuit = new JObject { ["initialState"] = initialState.DeepClone(), ["gates"] = new JArray(), ["operations"] = new JArray() };
                 }
-                else if (string.Equals(operationId, "defineOperation", StringComparison.OrdinalIgnoreCase))
+                 else if (string.Equals(operationId, "defineOperation", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (Required(parameters, "circuit") is not JObject input
-                        || input["initialState"]?.Type != JTokenType.String
-                        || input["gates"] is not JArray inputGates)
-                    {
-                        throw new ArgumentException("circuit must contain initialState and gates, as returned by a builder action.");
-                    }
-
+                    var input = GetCircuitInput(parameters, "defineOperation");
+                    var inputGates = input["gates"] as JArray ?? throw new ArgumentException("circuit.gates must be an array.");
                     circuit = (JObject)input.DeepClone();
                     var operationName = Required(parameters, "name");
                     if (operationName.Type != JTokenType.String)
@@ -223,15 +218,9 @@ namespace QuantumCircuit.Connector
                     circuit["operations"] = operations;
                     QuantumCircuitExecutor.ValidateCircuit(input["initialState"].Value<string>(), inputGates, operations);
                 }
-                else if (string.Equals(operationId, "callOperation", StringComparison.OrdinalIgnoreCase))
+                 else if (string.Equals(operationId, "callOperation", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (Required(parameters, "circuit") is not JObject input
-                        || input["initialState"]?.Type != JTokenType.String
-                        || input["gates"] is not JArray inputGates)
-                    {
-                        throw new ArgumentException("circuit must contain initialState and gates, as returned by a builder action.");
-                    }
-
+                    var input = GetCircuitInput(parameters, "callOperation");
                     circuit = (JObject)input.DeepClone();
                     var operationName = Required(parameters, "name");
                     if (operationName.Type != JTokenType.String || Required(parameters, "arguments") is not JObject arguments)
@@ -245,15 +234,9 @@ namespace QuantumCircuit.Connector
                     circuit["operations"] = operations;
                     QuantumCircuitExecutor.ValidateCircuit(input["initialState"].Value<string>(), gates, operations);
                 }
-                else if (string.Equals(operationId, "ifMeasurement", StringComparison.OrdinalIgnoreCase))
+                 else if (string.Equals(operationId, "ifMeasurement", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (Required(parameters, "circuit") is not JObject input
-                        || input["initialState"]?.Type != JTokenType.String
-                        || input["gates"] is not JArray inputGates)
-                    {
-                        throw new ArgumentException("circuit must contain initialState and gates, as returned by a builder action.");
-                    }
-
+                    var input = GetCircuitInput(parameters, "ifMeasurement");
                     var measurement = Required(parameters, "measurement");
                     var equals = Required(parameters, "equals");
                     if (measurement.Type != JTokenType.String || equals.Type != JTokenType.Boolean)
@@ -279,19 +262,15 @@ namespace QuantumCircuit.Connector
                     circuit["operations"] = inputOperations;
                     QuantumCircuitExecutor.ValidateCircuit(input["initialState"].Value<string>(), gates, inputOperations);
                 }
-                else
+                 else
                 {
                     var gate = GateActions.FirstOrDefault(action => string.Equals(action.Id, operationId, StringComparison.OrdinalIgnoreCase));
                     if (gate == null)
                     {
                         throw new ServiceOperationsProviderException(HttpStatusCode.BadRequest, ServiceOperationsErrorResponseCode.ServiceOperationIdNotSupported, $"Unsupported builder operation '{operationId}'.", null);
                     }
-                    if (Required(parameters, "circuit") is not JObject input
-                        || input["initialState"]?.Type != JTokenType.String
-                        || input["gates"] is not JArray inputGates)
-                    {
-                        throw new ArgumentException("circuit must contain initialState (bit string) and gates (array), as returned by the previous builder action.");
-                    }
+                    var input = GetCircuitInput(parameters, operationId);
+                    var inputGates = input["gates"] as JArray ?? throw new ArgumentException("circuit.gates must be an array.");
                     var inputOperations = GetCircuitOperations(input);
                     QuantumCircuitExecutor.ValidateCircuit(input["initialState"].Value<string>(), inputGates, inputOperations);
 
@@ -355,6 +334,42 @@ namespace QuantumCircuit.Connector
             return (JArray)operations.DeepClone();
         }
 
+        private static JObject GetCircuitInput(InsensitiveDictionary<JToken> parameters, string operationName)
+        {
+            if (parameters.TryGetValue("circuit", out var circuitToken)
+                && circuitToken != null
+                && circuitToken.Type != JTokenType.Null
+                && circuitToken is JObject circuitInput)
+            {
+                if (circuitInput["initialState"]?.Type != JTokenType.String || circuitInput["gates"] is not JArray)
+                {
+                    throw new ArgumentException($"{operationName}: circuit must contain initialState and gates, as returned by a prior builder action.");
+                }
+
+                return circuitInput;
+            }
+
+            var initialStateToken = parameters.TryGetValue("initialState", out var directInitialState) && directInitialState != null && directInitialState.Type != JTokenType.Null ? directInitialState : null;
+            var gatesToken = parameters.TryGetValue("gates", out var directGates) && directGates != null && directGates.Type != JTokenType.Null ? directGates : null;
+            if (initialStateToken == null || gatesToken == null)
+            {
+                throw new ArgumentException($"{operationName}: provide either the prior 'circuit' output or both 'initialState' and 'gates'.");
+            }
+
+            if (initialStateToken.Type != JTokenType.String || gatesToken is not JArray)
+            {
+                throw new ArgumentException($"{operationName}: initialState must be a bit string and gates must be an array.");
+            }
+
+            var directCircuit = new JObject
+            {
+                ["initialState"] = initialStateToken.DeepClone(),
+                ["gates"] = (JArray)directGates.DeepClone(),
+                ["operations"] = parameters.TryGetValue("operations", out var operationsToken) && operationsToken != null && operationsToken.Type != JTokenType.Null ? operationsToken.DeepClone() : new JArray(),
+            };
+            return directCircuit;
+        }
+
         private static JToken Required(InsensitiveDictionary<JToken> parameters, string name)
         {
             if (!parameters.TryGetValue(name, out var value) || value == null || value.Type == JTokenType.Null)
@@ -376,11 +391,11 @@ namespace QuantumCircuit.Connector
 
         private static SwaggerSchema IndexSchema(string title) => new SwaggerSchema { Type = SwaggerSchemaType.Integer, Title = title, Description = "Zero-based qubit index." };
 
-        private static SwaggerSchema CircuitSchema() => new SwaggerSchema
+         private static SwaggerSchema CircuitSchema() => new SwaggerSchema
         {
             Type = SwaggerSchemaType.Object,
             Title = "Circuit",
-            Description = "Use the circuit output of the preceding builder action.",
+            Description = "Optional when the action is chained from a previous builder step. If omitted, provide initialState and gates directly instead.",
             Properties = new OrdinalDictionary<SwaggerSchema>
             {
                 { "initialState", new SwaggerSchema { Type = SwaggerSchemaType.String, Title = "Initial basis state" } },
@@ -394,7 +409,7 @@ namespace QuantumCircuit.Connector
                 },
                 { "operations", OperationDefinitionsSchema() },
             },
-            Required = new[] { "initialState", "gates" },
+            Required = Array.Empty<string>(),
         };
 
         private static SwaggerSchema OperationDefinitionsSchema() => new SwaggerSchema
